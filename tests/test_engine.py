@@ -323,23 +323,25 @@ def test_title_pmg_subtitle_setup(emu: tuple[MPU, bytearray, dict[str, int]]) ->
     assert any(mem[p2_buf + i] != 0 for i in range(total_span_p2))
     assert any(mem[p3_buf + i] != 0 for i in range(total_span_p3))
 
-    # Verify first glyph on P0 & P2 matches 'W' (glyph 101 in title_charset_2) normal (non-inverted) with each row quadrupled
+    # Verify first glyph on P0 matches 'W' normal, and P2 matches 'W' inverted
     font_w_addr = labels["TITLE_CHARSET_2"] + (101 * 8)
     font_w_bytes = bytes(mem[font_w_addr : font_w_addr + 8])
     expected_w_bytes = bytes(b for b in font_w_bytes for _ in range(4))
+    expected_w_inv_bytes = bytes((b ^ 0xFF) for b in font_w_bytes for _ in range(4))
     actual_p0_w_bytes = bytes(mem[p0_buf : p0_buf + 32])
     actual_p2_w_bytes = bytes(mem[p2_buf : p2_buf + 32])
     assert actual_p0_w_bytes == expected_w_bytes
-    assert actual_p2_w_bytes == expected_w_bytes
+    assert actual_p2_w_bytes == expected_w_inv_bytes
 
-    # Verify 1st glyph on P1 & P3 matches 'S' (glyph 97 in title_charset_2) normal (non-inverted) with each row quadrupled
+    # Verify 1st glyph on P1 matches 'S' normal, and P3 matches 'S' inverted
     font_s_addr = labels["TITLE_CHARSET_2"] + (97 * 8)
     font_s_bytes = bytes(mem[font_s_addr : font_s_addr + 8])
     expected_s_bytes = bytes(b for b in font_s_bytes for _ in range(4))
+    expected_s_inv_bytes = bytes((b ^ 0xFF) for b in font_s_bytes for _ in range(4))
     actual_p1_s_bytes = bytes(mem[p1_buf : p1_buf + 32])
     actual_p3_s_bytes = bytes(mem[p3_buf : p3_buf + 32])
     assert actual_p1_s_bytes == expected_s_bytes
-    assert actual_p3_s_bytes == expected_s_bytes
+    assert actual_p3_s_bytes == expected_s_inv_bytes
 
     # Verify margin between character 0 and character 1 on P0, P1, P2, P3 is 0 (blank)
     if labels["TITLE_P0_MARGIN"] > 0:

@@ -19,14 +19,14 @@ TITLE_P3_MARGIN         = 8         ; Margines (odstęp w liniach) pomiędzy zna
 TITLE_SUBTITLE_Y        = 32        ; Pozycja pionowa Y dla Playerów (bufor single-line PMG)
 TITLE_P0_Y              = TITLE_SUBTITLE_Y ; Pozycja pionowa Y dla Player 0 ("WBREW ")
 TITLE_P1_Y              = TITLE_SUBTITLE_Y ; Pozycja pionowa Y dla Player 1 (" SOBIE")
-TITLE_P2_Y              = TITLE_SUBTITLE_Y+4 ; Pozycja pionowa Y dla Player 2 (podkład spacji pod P0)
-TITLE_P3_Y              = TITLE_SUBTITLE_Y+4 ; Pozycja pionowa Y dla Player 3 (podkład spacji pod P1)
+TITLE_P2_Y              = TITLE_SUBTITLE_Y+2 ; Pozycja pionowa Y dla Player 2 (podkład spacji pod P0)
+TITLE_P3_Y              = TITLE_SUBTITLE_Y+2 ; Pozycja pionowa Y dla Player 3 (podkład spacji pod P1)
 
 TITLE_START_X           = 128                 ; Pozycja pozioma
 TITLE_P0_X              = TITLE_START_X       ; Pozycja pozioma HPOSP0 (na wierzchu, "WBREW ")
-TITLE_P1_X              = TITLE_START_X+20+4  ; Pozycja pozioma HPOSP1 (na wierzchu, " SOBIE")
-TITLE_P2_X              = TITLE_START_X+2       ; Pozycja pozioma HPOSP2 (podkład pod Player 0)
-TITLE_P3_X              = TITLE_START_X+20+4+2  ; Pozycja pozioma HPOSP3 (podkład pod Player 1)
+TITLE_P1_X              = TITLE_START_X+16+4  ; Pozycja pozioma HPOSP1 (na wierzchu, " SOBIE")
+TITLE_P2_X              = TITLE_START_X+1       ; Pozycja pozioma HPOSP2 (podkład pod Player 0)
+TITLE_P3_X              = TITLE_START_X+16+4+1  ; Pozycja pozioma HPOSP3 (podkład pod Player 1)
 
 ; Szerokość graczy (0 = normalna 1x, 1 = podwójna 2x, 3 = poczwórna 4x):
 TITLE_P0_SIZE           = 1         ; Player 0 szerokość x4

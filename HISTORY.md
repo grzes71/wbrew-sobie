@@ -2,6 +2,14 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-11] - Selectable Glyphs Inversion Flag in PMG Text Renderer
+- Added `zp_pmg_invert` (`$96`) to [zeropage.asm](zeropage.asm) and integrated `eor zp_pmg_invert` into `pmg_render_text` in [lib/pmg.asm](lib/pmg.asm).
+- Configured Player 0 (`"WBREW"`) and Player 1 (`"SOBIE"`) to render in normal mode (`zp_pmg_invert = 0`).
+- Configured Player 2 (`"WBREW"`) and Player 3 (`"SOBIE"`) to render in inverse mode (`zp_pmg_invert = $FF`) in [scenes/title.asm](scenes/title.asm).
+- Updated py65 test `test_title_pmg_subtitle_setup` in [tests/test_engine.py](tests/test_engine.py) to assert normal bitmaps on P0/P1 and inverted bitmaps on P2/P3.
+- Rebuilt and verified with AltirraSDL emulator.
+
+
 ## [2026-11-11] - Normal Text Rendering (No Inversion) and Duplicate Text on P2/P3
 - Removed byte inversion (`eor #$FF`) in `pmg_render_text` ([lib/pmg.asm](lib/pmg.asm)), restoring normal font glyph rendering for all Players.
 - Configured Player 2 to render the exact same text as Player 0 (`"WBREW"` via `text_wbrew`) in [scenes/title.asm](scenes/title.asm).

@@ -103,7 +103,7 @@
     lda #TITLE_P3_X
     sta HPOSP3
 
-    ; Render "WBREW" on Player 0
+    ; Render "WBREW" on Player 0 (normal, no inversion)
     lda #<(PMG_P0 + TITLE_P0_Y)
     sta zp_pmg_dst
     lda #>(PMG_P0 + TITLE_P0_Y)
@@ -118,9 +118,11 @@
     sta zp_pmg_len
     lda #TITLE_P0_MARGIN
     sta zp_pmg_margin
+    lda #0
+    sta zp_pmg_invert
     jsr pmg_render_text
 
-    ; Render "SOBIE" on Player 1
+    ; Render "SOBIE" on Player 1 (normal, no inversion)
     lda #<(PMG_P1 + TITLE_P1_Y)
     sta zp_pmg_dst
     lda #>(PMG_P1 + TITLE_P1_Y)
@@ -135,9 +137,11 @@
     sta zp_pmg_len
     lda #TITLE_P1_MARGIN
     sta zp_pmg_margin
+    lda #0
+    sta zp_pmg_invert
     jsr pmg_render_text
 
-    ; Render "WBREW" on Player 2 (dokładnie ten sam napis co na Player 0)
+    ; Render "WBREW" on Player 2 (inwersja)
     lda #<(PMG_P2 + TITLE_P2_Y)
     sta zp_pmg_dst
     lda #>(PMG_P2 + TITLE_P2_Y)
@@ -152,9 +156,11 @@
     sta zp_pmg_len
     lda #TITLE_P2_MARGIN
     sta zp_pmg_margin
+    lda #$FF
+    sta zp_pmg_invert
     jsr pmg_render_text
 
-    ; Render "SOBIE" on Player 3 (dokładnie ten sam napis co na Player 1)
+    ; Render "SOBIE" on Player 3 (inwersja)
     lda #<(PMG_P3 + TITLE_P3_Y)
     sta zp_pmg_dst
     lda #>(PMG_P3 + TITLE_P3_Y)
@@ -169,6 +175,8 @@
     sta zp_pmg_len
     lda #TITLE_P3_MARGIN
     sta zp_pmg_margin
+    lda #$FF
+    sta zp_pmg_invert
     jsr pmg_render_text
 
     ; 7. Re-enable DMA ($3E = single-line PMG + playfield) and VBI + DLI interrupts ($C0)

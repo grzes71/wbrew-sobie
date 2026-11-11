@@ -63,6 +63,7 @@
 ;   - zp_pmg_src_text ($90-$91): pointer to array of charset glyph indices
 ;   - zp_pmg_len      ($94)    : number of characters to render
 ;   - zp_pmg_margin   ($95)    : margin in scanlines between characters (e.g. TITLE_P0_MARGIN)
+;   - zp_pmg_invert   ($96)    : inversion flag: 0 = normal, $FF = inverted glyph pixels
 ; Font source:
 ;   - Title charset 2 base address is title_charset_2 ($4800)
 ;   - Each glyph is 8 bytes in font: address = title_charset_2 + (glyph_index * 8)
@@ -108,6 +109,7 @@
 
 @copy_glyph_rows
     lda (zp_pmg_char_ptr),y
+    eor zp_pmg_invert       ; Invert if zp_pmg_invert = $FF, pass-through if 0
     pha                     ; Save glyph row byte
     txa
     tay                     ; Y = destination buffer offset
