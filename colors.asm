@@ -22,7 +22,7 @@ TITLE_P1_Y              = TITLE_SUBTITLE_Y ; Pozycja pionowa Y dla Player 1 (" S
 TITLE_P2_Y              = TITLE_SUBTITLE_Y+2 ; Pozycja pionowa Y dla Player 2 (podkład spacji pod P0)
 TITLE_P3_Y              = TITLE_SUBTITLE_Y+2 ; Pozycja pionowa Y dla Player 3 (podkład spacji pod P1)
 
-TITLE_START_X           = 128                 ; Pozycja pozioma
+TITLE_START_X           = 48                 ; Pozycja pozioma
 TITLE_P0_X              = TITLE_START_X       ; Pozycja pozioma HPOSP0 (na wierzchu, "WBREW ")
 TITLE_P1_X              = TITLE_START_X+16+4  ; Pozycja pozioma HPOSP1 (na wierzchu, " SOBIE")
 TITLE_P2_X              = TITLE_START_X+1       ; Pozycja pozioma HPOSP2 (podkład pod Player 0)

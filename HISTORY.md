@@ -2,6 +2,12 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-11] - Update Title Screen Image and PMG Horizontal Coordinates
+- Updated source image [images/title.png](images/title.png).
+- Adjusted `TITLE_START_X = 48` in [colors.asm](colors.asm) for PMG subtitle horizontal positioning.
+- Verified test suite and memory checks.
+
+
 ## [2026-11-11] - Selectable Glyphs Inversion Flag in PMG Text Renderer
 - Added `zp_pmg_invert` (`$96`) to [zeropage.asm](zeropage.asm) and integrated `eor zp_pmg_invert` into `pmg_render_text` in [lib/pmg.asm](lib/pmg.asm).
 - Configured Player 0 (`"WBREW"`) and Player 1 (`"SOBIE"`) to render in normal mode (`zp_pmg_invert = 0`).
