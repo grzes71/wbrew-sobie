@@ -2,6 +2,32 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-11] - Correct Pairwise Bit Alignment for Fifth Player Missiles
+- Resolved split/gap distortion on glyphs (such as 'I' and 'T') by correctly mapping font pixels across the four 2-bit missile registers:
+  - Missile 0 (leftmost): bits 1 (left) and 0 (right)
+  - Missile 1: bits 3 (left) and 2 (right)
+  - Missile 2: bits 5 (left) and 4 (right)
+  - Missile 3 (rightmost): bits 7 (left) and 6 (right)
+- Recompiled `scroller_text_data` in [scenes/title.asm](scenes/title.asm).
+- Verified sharp and solid rendering of all letters (`I`, `T`, `P`, `R`, `E`, `S`, `F`, `O`, `A`) in AltirraSDL emulator.
+
+
+## [2026-11-11] - Correct Fifth Player Bit Order (Fix Mirrored Glyph Rendering)
+- Replaced missile text bitmap table `scroller_text_data` in [scenes/title.asm](scenes/title.asm) with bit-reversed values.
+- Mapped font bit 7 to missile 3 (rightmost) and bit 0 to missile 0 (leftmost) to correct the horizontal mirroring on GTIA hardware.
+- Verified correct orientation of letters in AltirraSDL emulator screenshot.
+
+
+## [2026-11-11] - Implement Fifth Player Vertical Scroller ("PRESS FIRE TO START")
+- Enabled Fifth Player mode in GTIA (`PRIOR = $10` / `GPRIOR = $10`), combining all 4 missiles into an 8-color-clock wide 5th player.
+- Configured 5th player color via `COLPF3` / `COLOR3` (`TITLE_P5_COLOR = $0E`) and horizontal position at the right screen edge (`TITLE_P5_X = 200` with `HPOSM0..HPOSM3` spaced by 2 color clocks) in [colors.asm](colors.asm).
+- Added precompiled scanline bitmap table for `"PRESS FIRE TO START"` in [scenes/title.asm](scenes/title.asm).
+- Implemented `title_update_scroller` called each frame in `title_update` to smoothly scroll text from bottom to top through `PMG_MISSILES` (`$3B00`).
+- Added Zero-Page state variables `zp_scroller_pos` (`$97-$98`) and `zp_scroller_speed_cnt` (`$99`) in [zeropage.asm](zeropage.asm).
+- Updated integration tests in [tests/test_engine.py](tests/test_engine.py) covering 5th player register setup and scroller execution.
+- Verified in AltirraSDL emulator.
+
+
 ## [2026-11-11] - Update Title Screen Image and PMG Horizontal Coordinates
 - Updated source image [images/title.png](images/title.png).
 - Adjusted `TITLE_START_X = 48` in [colors.asm](colors.asm) for PMG subtitle horizontal positioning.

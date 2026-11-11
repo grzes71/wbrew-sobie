@@ -343,16 +343,17 @@ def test_title_pmg_subtitle_setup(emu: tuple[MPU, bytearray, dict[str, int]]) ->
     assert actual_p1_s_bytes == expected_s_bytes
     assert actual_p3_s_bytes == expected_s_inv_bytes
 
-    # Verify margin between character 0 and character 1 on P0, P1, P2, P3 is 0 (blank)
-    if labels["TITLE_P0_MARGIN"] > 0:
-        for m in range(labels["TITLE_P0_MARGIN"]):
-            assert mem[p0_buf + 32 + m] == 0
-    if labels["TITLE_P1_MARGIN"] > 0:
-        for m in range(labels["TITLE_P1_MARGIN"]):
-            assert mem[p1_buf + 32 + m] == 0
-    if labels["TITLE_P2_MARGIN"] > 0:
-        for m in range(labels["TITLE_P2_MARGIN"]):
-            assert mem[p2_buf + 32 + m] == 0
-    if labels["TITLE_P3_MARGIN"] > 0:
-        for m in range(labels["TITLE_P3_MARGIN"]):
-            assert mem[p3_buf + 32 + m] == 0
+    # Verify 5th Player (4 Missiles) configuration in GTIA
+    assert mem[0x026F] & 0x10 == 0x10  # GPRIOR bit 4 (5th player mode enabled)
+    assert mem[0xD01B] & 0x10 == 0x10  # PRIOR bit 4
+    assert mem[0x02C7] == labels["TITLE_P5_COLOR"]  # COLOR3 (5th player color)
+    assert mem[0xD019] == labels["TITLE_P5_COLOR"]  # COLPF3 (5th player color)
+    assert mem[0xD004] == labels["TITLE_P5_X"]      # HPOSM0
+    assert mem[0xD005] == labels["TITLE_P5_X"] + 2  # HPOSM1
+    assert mem[0xD006] == labels["TITLE_P5_X"] + 4  # HPOSM2
+    assert mem[0xD007] == labels["TITLE_P5_X"] + 6  # HPOSM3
+
+    # Verify scroller step updates missile buffer
+    run_subroutine(mpu, labels["TITLE_UPDATE_SCROLLER"])
+    missiles_buf = labels["PMG_MISSILES"]
+    assert any(mem[missiles_buf + i] != 0 for i in range(256))

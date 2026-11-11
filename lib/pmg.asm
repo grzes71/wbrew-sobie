@@ -50,6 +50,13 @@
     sta SIZEP2
     lda #TITLE_P3_SIZE
     sta SIZEP3
+
+    ; Fifth Player (4 missiles grouped together):
+    ; SIZEM: 0 = standard single-width missiles
+    ; When missiles are positioned together, each missile is 2 color clocks wide,
+    ; total 4 missiles * 2 = 8 color clocks (same as normal player width).
+    lda #0
+    sta SIZEM
     rts
 .endp
 

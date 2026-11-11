@@ -42,3 +42,11 @@ TITLE_P1_COLOR          = $86       ; Kolor gracza 1 / PCOLR1 (tło napisu SOBIE
 TITLE_P2_COLOR          = $a4       ; Kolor gracza 2 / PCOLR2 (litery WBREW przebijające przez P0)
 TITLE_P3_COLOR          = $84       ; Kolor gracza 3 / PCOLR3 (litery SOBIE przebijające przez P1)
 
+; --- Fifth Player (4 Missiles combined into 5th Player) Configuration ---
+; Rejestr PRIOR bit 4 ($10) włącza tryb 5. gracza.
+; Kolor 5. gracza pochodzi z COLPF3 / COLOR3.
+TITLE_P5_COLOR          = $0E       ; Kolor 5. gracza (biel/jasny dla napisu PRESS FIRE TO START)
+TITLE_P5_X              = 200       ; Pozycja pozioma z prawego brzegu ekranu (HPOSM0..HPOSM3)
+TITLE_P5_SCROLL_SPEED   = 1         ; Prędkość przewijania w pikselach/klatkę (z dołu do góry)
+
+
