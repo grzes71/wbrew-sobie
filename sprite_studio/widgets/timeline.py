@@ -9,6 +9,7 @@ class TimelineWidget(QWidget):
     duplicate_requested = Signal(int)
     insert_requested = Signal(int)
     reorder_requested = Signal(int, int) # from_idx, to_idx
+    reverse_requested = Signal()
     copy_requested = Signal(int)
     paste_requested = Signal(int)
     mirror_requested = Signal(int)
@@ -53,10 +54,14 @@ class TimelineWidget(QWidget):
         self.btn_del = QPushButton("Del")
         self.btn_del.clicked.connect(self._on_del)
         
+        self.btn_reverse = QPushButton("Reverse")
+        self.btn_reverse.clicked.connect(self.reverse_requested.emit)
+        
         btn_layout.addWidget(self.btn_add)
         btn_layout.addWidget(self.btn_ins)
         btn_layout.addWidget(self.btn_dup)
         btn_layout.addWidget(self.btn_del)
+        btn_layout.addWidget(self.btn_reverse)
         layout.addLayout(btn_layout)
         
         transform_layout = QHBoxLayout()

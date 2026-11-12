@@ -2,6 +2,13 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-12] - Add Animation Frames Reverse Option to Sprite Studio
+- Added `btn_reverse` ("Reverse") and `reverse_requested` signal to `TimelineWidget` in [sprite_studio/widgets/timeline.py](sprite_studio/widgets/timeline.py).
+- Added "Reverse Frames" action in the Edit menu and connected `reverse_requested` to `_on_reverse_frames` in [sprite_studio/main.py](sprite_studio/main.py).
+- Implemented `_on_reverse_frames` with full undo/redo command history support, reversing the sprite's animation frame sequence and adjusting active frame selection.
+- Added automated unit tests in [tests/test_sprite_studio.py](tests/test_sprite_studio.py) verifying button signal emission, frame reversal, and undo/redo behavior.
+
+
 ## [2026-11-11] - Correct Pairwise Bit Alignment for Fifth Player Missiles
 - Resolved split/gap distortion on glyphs (such as 'I' and 'T') by correctly mapping font pixels across the four 2-bit missile registers:
   - Missile 0 (leftmost): bits 1 (left) and 0 (right)

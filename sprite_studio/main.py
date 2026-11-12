@@ -80,6 +80,7 @@ class MainWindow(QMainWindow):
         self.timeline.duplicate_requested.connect(self._on_dup_frame)
         self.timeline.insert_requested.connect(self._on_insert_frame)
         self.timeline.reorder_requested.connect(self._on_reorder_frame)
+        self.timeline.reverse_requested.connect(self._on_reverse_frames)
         self.timeline.copy_requested.connect(self._on_copy_frame)
         self.timeline.paste_requested.connect(self._on_paste_frame)
         self.timeline.mirror_h_requested.connect(self._on_mirror_h_frame)
@@ -176,6 +177,11 @@ class MainWindow(QMainWindow):
         act_mirror_v = QAction("V Mirror Frame", self)
         act_mirror_v.triggered.connect(lambda: self._on_mirror_v_frame(self.current_frame_idx))
         edit_menu.addAction(act_mirror_v)
+
+        edit_menu.addSeparator()
+        act_reverse = QAction("Reverse Frames", self)
+        act_reverse.triggered.connect(self._on_reverse_frames)
+        edit_menu.addAction(act_reverse)
 
     # --- Commands Framework ---
     
@@ -425,6 +431,23 @@ class MainWindow(QMainWindow):
             f = spr.frames.pop(to_idx)
             spr.frames.insert(from_idx, f)
         self._execute_cmd("Reorder Frame", do, undo, self._refresh_sprite)
+
+    def _on_reverse_frames(self):
+        if not self.current_sprite or len(self.current_sprite.frames) <= 1:
+            return
+        spr = self.current_sprite
+        old_idx = self.current_frame_idx
+        new_idx = len(spr.frames) - 1 - old_idx if 0 <= old_idx < len(spr.frames) else old_idx
+
+        def do():
+            spr.frames.reverse()
+            self.current_frame_idx = new_idx
+
+        def undo():
+            spr.frames.reverse()
+            self.current_frame_idx = old_idx
+
+        self._execute_cmd("Reverse Frames", do, undo, self._refresh_sprite)
 
     def _on_copy_frame(self, idx=None):
         focus = self.focusWidget()
