@@ -2,6 +2,24 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-12] - Render Fifth Player Text ("PRESS FIRE TO START") Without Inversion
+- Removed `eor #$FF` and `$FF` border padding in `title_enter` ([scenes/title.asm](scenes/title.asm)) so `p5_text_data` is copied directly to `PMG_MISSILES + TITLE_P5_Y`.
+- Updated `test_title_pmg_subtitle_setup` in [tests/test_engine.py](tests/test_engine.py) to assert non-inverted missile bytes and `0x00` padding.
+
+
+## [2026-11-12] - Restore 1x Missile Width for Static Inverted Fifth Player Text
+- Changed `TITLE_P5_SIZEM` to `$00` (1x width) and `TITLE_P5_X` to `200` in [colors.asm](colors.asm).
+- Updated `HPOSM0..HPOSM3` spacing back to 2 color clocks (`200, 202, 204, 206`) in [scenes/title.asm](scenes/title.asm).
+- Updated `test_title_pmg_subtitle_setup` in [tests/test_engine.py](tests/test_engine.py) to verify 1x `SIZEM` and 2-clock missile spacing.
+
+
+## [2026-11-12] - Static x2 Inverted Fifth Player Text ("PRESS FIRE TO START")
+- Replaced the vertical Fifth Player scroller with a static, inverted, 2x-wide missile bar in [scenes/title.asm](scenes/title.asm) (`p5_text_data`, `P5_TEXT_LEN = 190`).
+- Set `SIZEM = $55` (`TITLE_P5_SIZEM`) and spaced `HPOSM0..HPOSM3` by 4 color clocks starting at `TITLE_P5_X = 192` in [colors.asm](colors.asm) and [scenes/title.asm](scenes/title.asm).
+- Copied `p5_text_data` with `eor #$FF` into `PMG_MISSILES + TITLE_P5_Y` (`33..222`, padded with `$FF` at `32` and `223`) during `title_init`, and removed `title_update_scroller` and unused `TITLE_P5_SCROLL_SPEED` / `zp_scroller_pos` / `zp_scroller_speed_cnt` from [zeropage.asm](zeropage.asm).
+- Updated [tests/test_engine.py](tests/test_engine.py) (`test_title_pmg_subtitle_setup`) to assert `SIZEM`, `HPOSM0..HPOSM3` 4-clock spacing, and inverted missile bitmap bytes.
+
+
 ## [2026-11-12] - Add Animation Frames Reverse Option to Sprite Studio
 - Added `btn_reverse` ("Reverse") and `reverse_requested` signal to `TimelineWidget` in [sprite_studio/widgets/timeline.py](sprite_studio/widgets/timeline.py).
 - Added "Reverse Frames" action in the Edit menu and connected `reverse_requested` to `_on_reverse_frames` in [sprite_studio/main.py](sprite_studio/main.py).

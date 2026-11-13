@@ -348,12 +348,18 @@ def test_title_pmg_subtitle_setup(emu: tuple[MPU, bytearray, dict[str, int]]) ->
     assert mem[0xD01B] & 0x10 == 0x10  # PRIOR bit 4
     assert mem[0x02C7] == labels["TITLE_P5_COLOR"]  # COLOR3 (5th player color)
     assert mem[0xD019] == labels["TITLE_P5_COLOR"]  # COLPF3 (5th player color)
+    assert mem[0xD00C] == labels["TITLE_P5_SIZEM"]  # SIZEM (x1 width = $00)
     assert mem[0xD004] == labels["TITLE_P5_X"]      # HPOSM0
     assert mem[0xD005] == labels["TITLE_P5_X"] + 2  # HPOSM1
     assert mem[0xD006] == labels["TITLE_P5_X"] + 4  # HPOSM2
     assert mem[0xD007] == labels["TITLE_P5_X"] + 6  # HPOSM3
 
-    # Verify scroller step updates missile buffer
-    run_subroutine(mpu, labels["TITLE_UPDATE_SCROLLER"])
+    # Verify static non-inverted text rendered into missile buffer
     missiles_buf = labels["PMG_MISSILES"]
-    assert any(mem[missiles_buf + i] != 0 for i in range(256))
+    p5_y = labels["TITLE_P5_Y"]
+    p5_data = labels["P5_TEXT_DATA"]
+    p5_len = labels["P5_TEXT_LEN"]
+    assert mem[missiles_buf + p5_y - 1] == 0x00
+    assert mem[missiles_buf + p5_y + p5_len] == 0x00
+    for i in range(p5_len):
+        assert mem[missiles_buf + p5_y + i] == mem[p5_data + i]

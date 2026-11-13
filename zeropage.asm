@@ -26,6 +26,4 @@ zp_pmg_char_ptr     = $92   ; Wskaźnik do definicji znaku w foncie (2 bajty: $9
 zp_pmg_len          = $94   ; Długość generowanego napisu (1 bajt)
 zp_pmg_margin       = $95   ; Margines (odstęp) w liniach pomiędzy znakami dla danego Playera (1 bajt)
 zp_pmg_invert       = $96   ; Flaga inwersji znaku: 0 = normalny, $FF = inwersja (1 bajt)
-zp_scroller_pos     = $97   ; 16-bitowa pozycja scrollera 5. gracza (2 bajty: $97-$98)
-zp_scroller_speed_cnt = $99 ; Licznik spowalniania scrollera (1 bajt)
 
