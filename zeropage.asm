@@ -26,4 +26,5 @@ zp_pmg_char_ptr     = $92   ; Wskaźnik do definicji znaku w foncie (2 bajty: $9
 zp_pmg_len          = $94   ; Długość generowanego napisu (1 bajt)
 zp_pmg_margin       = $95   ; Margines (odstęp) w liniach pomiędzy znakami dla danego Playera (1 bajt)
 zp_pmg_invert       = $96   ; Flaga inwersji znaku: 0 = normalny, $FF = inwersja (1 bajt)
+zp_p5_wave_phase    = $97   ; Bieżąca faza fali sinusowej dla 5. gracza (1 bajt)
 

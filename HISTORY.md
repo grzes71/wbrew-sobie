@@ -2,6 +2,14 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-15] - Sine-Wave Animation for Fifth Player Text via Per-Row DLI
+- Configured `TITLE_P5_Y = 48`, `TITLE_P5_WAVE_SPEED = 1`, and `TITLE_P5_WAVE_STEP = 3` in [colors.asm](colors.asm), and added `zp_p5_wave_phase = $97` in [zeropage.asm](zeropage.asm).
+- Updated [scripts/compile_title_screen.py](scripts/compile_title_screen.py) to emit `TITLE_DLI_COUNT = 24`, per-row `title_dli_chbase` entries (rows `0..23`), and `DL_DLI` before every Mode 4 row (`3rd DL_BLANK8` + rows `0..22`) in `title_dlist`.
+- Extended `title_dli_handler` in [engine/dli.asm](engine/dli.asm) to update both `CHBASE` and `HPOSM0..HPOSM3` from `p5_row_x,x` on every Mode 4 row (`78` cycles).
+- Added 64-entry sine table `p5_sin_table` (-20..+20), `p5_row_x` (24 bytes), and `title_update_p5_wave` in [scenes/title.asm](scenes/title.asm), and compacted `p5_text_data` to 8 bytes per character (`P5_TEXT_LEN = 152`, leading `$00` on Mode 4 badline scanline 0 followed by 7 glyph rows) aligned to Mode 4 rows `2..20`.
+- Updated `test_title_dli_handler_switches_charsets` and `test_title_pmg_subtitle_setup` in [tests/test_engine.py](tests/test_engine.py) to verify 24 per-row DLIs, sine-wave phase progression, and `HPOSM0..HPOSM3` updates.
+
+
 ## [2026-11-12] - Render Fifth Player Text ("PRESS FIRE TO START") Without Inversion
 - Removed `eor #$FF` and `$FF` border padding in `title_enter` ([scenes/title.asm](scenes/title.asm)) so `p5_text_data` is copied directly to `PMG_MISSILES + TITLE_P5_Y`.
 - Updated `test_title_pmg_subtitle_setup` in [tests/test_engine.py](tests/test_engine.py) to assert non-inverted missile bytes and `0x00` padding.

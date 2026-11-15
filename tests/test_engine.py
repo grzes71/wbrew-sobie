@@ -162,11 +162,11 @@ def test_title_palette_and_dli_setup(emu: tuple[MPU, bytearray, dict[str, int]])
 
 
 def test_title_dli_handler_switches_charsets(emu: tuple[MPU, bytearray, dict[str, int]]) -> None:
-    """Verify that title_dli_handler cycles through all secondary charsets and wraps around."""
+    """Verify that title_dli_handler updates CHBASE and HPOSM0..3 for all 24 rows and wraps around."""
     mpu, mem, labels = emu
     raw_json = json.loads(JSON_PATH.read_text(encoding="utf-8"))
-    num_charsets = len(raw_json["charsets"])
-    dli_count = num_charsets - 1
+    dli_count = 24
+    assert labels["TITLE_DLI_COUNT"] == dli_count
 
     run_subroutine(mpu, labels["TITLE_ENTER"])
 
@@ -175,11 +175,21 @@ def test_title_dli_handler_switches_charsets(emu: tuple[MPU, bytearray, dict[str
     mpu.x = 0x55
     mpu.y = 0x33
 
+    p5_row_x_addr = labels["P5_ROW_X"]
     for i in range(dli_count):
+        line_y = i * 8
+        seg_idx = next(
+            cs["index"] for cs in raw_json["charsets"] if cs["start_line"] <= line_y < cs["end_line"]
+        )
         cycles = run_interrupt_handler(mpu, labels["TITLE_DLI_HANDLER"])
-        assert cycles <= 55, f"DLI took {cycles} cycles, exceeding safe scanline budget"
-        expected_chbase = labels[f"TITLE_CHARSET_{i + 1}"] >> 8
+        assert cycles <= 85, f"DLI took {cycles} cycles, exceeding safe scanline budget"
+        expected_chbase = labels[f"TITLE_CHARSET_{seg_idx}"] >> 8
         assert mem[CHBASE] == expected_chbase
+        row_x = mem[p5_row_x_addr + i]
+        assert mem[0xD004] == row_x      # HPOSM0
+        assert mem[0xD005] == row_x + 2  # HPOSM1
+        assert mem[0xD006] == row_x + 4  # HPOSM2
+        assert mem[0xD007] == row_x + 6  # HPOSM3
         assert mpu.a == 0xAA
         assert mpu.x == 0x55
         assert mpu.y == 0x33
@@ -349,17 +359,38 @@ def test_title_pmg_subtitle_setup(emu: tuple[MPU, bytearray, dict[str, int]]) ->
     assert mem[0x02C7] == labels["TITLE_P5_COLOR"]  # COLOR3 (5th player color)
     assert mem[0xD019] == labels["TITLE_P5_COLOR"]  # COLPF3 (5th player color)
     assert mem[0xD00C] == labels["TITLE_P5_SIZEM"]  # SIZEM (x1 width = $00)
-    assert mem[0xD004] == labels["TITLE_P5_X"]      # HPOSM0
-    assert mem[0xD005] == labels["TITLE_P5_X"] + 2  # HPOSM1
-    assert mem[0xD006] == labels["TITLE_P5_X"] + 4  # HPOSM2
-    assert mem[0xD007] == labels["TITLE_P5_X"] + 6  # HPOSM3
 
-    # Verify static non-inverted text rendered into missile buffer
+    p5_row_x_addr = labels["P5_ROW_X"]
+    base_x = labels["TITLE_P5_X"]
+    row0_x = mem[p5_row_x_addr]
+    assert mem[0xD004] == row0_x      # HPOSM0
+    assert mem[0xD005] == row0_x + 2  # HPOSM1
+    assert mem[0xD006] == row0_x + 4  # HPOSM2
+    assert mem[0xD007] == row0_x + 6  # HPOSM3
+
+    # Verify non-inverted text rendered into missile buffer (152 bytes = 19 * 8)
     missiles_buf = labels["PMG_MISSILES"]
     p5_y = labels["TITLE_P5_Y"]
     p5_data = labels["P5_TEXT_DATA"]
     p5_len = labels["P5_TEXT_LEN"]
+    assert p5_len == 152
     assert mem[missiles_buf + p5_y - 1] == 0x00
     assert mem[missiles_buf + p5_y + p5_len] == 0x00
     for i in range(p5_len):
         assert mem[missiles_buf + p5_y + i] == mem[p5_data + i]
+
+    # Verify sine-wave X table populated within [TITLE_P5_X - 20, TITLE_P5_X + 20] with per-row phase shift
+    initial_row_xs = list(mem[p5_row_x_addr : p5_row_x_addr + 24])
+    assert all(base_x - 20 <= x <= base_x + 20 for x in initial_row_xs)
+    assert len(set(initial_row_xs)) > 1
+    assert initial_row_xs[0] != initial_row_xs[1]
+
+    # Verify TITLE_UPDATE advances wave phase and updates p5_row_x
+    phase_before = mem[labels["ZP_P5_WAVE_PHASE"]]
+    mem[labels["ZP_FIRE_PRESSED"]] = 0
+    run_subroutine(mpu, labels["TITLE_UPDATE"])
+    phase_after = mem[labels["ZP_P5_WAVE_PHASE"]]
+    assert phase_after == ((phase_before + labels["TITLE_P5_WAVE_SPEED"]) & 0xFF)
+    updated_row_xs = list(mem[p5_row_x_addr : p5_row_x_addr + 24])
+    assert all(base_x - 20 <= x <= base_x + 20 for x in updated_row_xs)
+    assert updated_row_xs != initial_row_xs

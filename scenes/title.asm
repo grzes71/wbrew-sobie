@@ -194,12 +194,17 @@
     lda #TITLE_P5_SIZEM
     sta SIZEM
 
-    ; Set horizontal position for 4 missiles placed side-by-side (2 color clocks each at 1x width)
+    ; Initialize wave phase and compute initial per-row X positions
+    lda #0
+    sta zp_p5_wave_phase
+    jsr title_update_p5_wave
+
+    ; Set initial horizontal position for 4 missiles placed side-by-side (2 color clocks each at 1x width)
     ; Missile 0 (bits 0,1) at X
     ; Missile 1 (bits 2,3) at X+2
     ; Missile 2 (bits 4,5) at X+4
     ; Missile 3 (bits 6,7) at X+6
-    lda #TITLE_P5_X
+    lda p5_row_x
     sta HPOSM0
     clc
     adc #2
@@ -247,6 +252,9 @@ TEXT_SPACES_LEN = 5
     lda #>title_charset_0
     sta CHBAS
 
+    ; Advance 5th player sine-wave animation table
+    jsr title_update_p5_wave
+
     ; Transition TITLE_SCREEN -> GAME on FIRE press
     lda zp_fire_pressed
     beq @stay
@@ -256,33 +264,73 @@ TEXT_SPACES_LEN = 5
     rts
 .endp
 
+; ------------------------------------------------------------------------------
+; title_update_p5_wave — Computes per-row X offsets in p5_row_x[0..23]
+; Uses 64-entry sine table (-20..+20) centered on TITLE_P5_X
+; ------------------------------------------------------------------------------
+.proc title_update_p5_wave
+    clc
+    lda zp_p5_wave_phase
+    adc #TITLE_P5_WAVE_SPEED
+    sta zp_p5_wave_phase
+    tay                         ; Y holds running angle for row X
+    ldx #0
+@row_loop
+    tya
+    and #$3F
+    tay
+    lda p5_sin_table,y
+    clc
+    adc #TITLE_P5_X
+    sta p5_row_x,x
+    tya
+    clc
+    adc #TITLE_P5_WAVE_STEP
+    tay
+    inx
+    cpx #24
+    bne @row_loop
+    rts
+.endp
+
+; Per-row horizontal base position (HPOSM0) updated each frame & read by DLI
+p5_row_x
+    :24 dta TITLE_P5_X
+
+; 64-entry signed sine table with amplitude 20 (-20..+20)
+p5_sin_table
+    dta $00, $02, $04, $06, $08, $09, $0B, $0D, $0E, $0F, $11, $12, $12, $13, $14, $14
+    dta $14, $14, $14, $13, $12, $12, $11, $0F, $0E, $0D, $0B, $09, $08, $06, $04, $02
+    dta $00, $FE, $FC, $FA, $F8, $F7, $F5, $F3, $F2, $F1, $EF, $EE, $EE, $ED, $EC, $EC
+    dta $EC, $EC, $EC, $ED, $EE, $EE, $EF, $F1, $F2, $F3, $F5, $F7, $F8, $FA, $FC, $FE
+
 ; --- Precompiled 1-byte per scanline bitmap for "PRESS FIRE TO START" ---
-; 19 characters * (8 font rows + 2 blank rows) = 190 bytes
+; 19 characters * (1 blank badline row + 7 font rows) = 152 bytes (8 lines/char, aligned to Mode 4 rows)
 ; Mapped to Fifth Player hardware missile bit layout:
 ; M0 (leftmost) takes bits 1 (left) and 0 (right)
 ; M1 takes bits 3 (left) and 2 (right)
 ; M2 takes bits 5 (left) and 4 (right)
 ; M3 (rightmost) takes bits 7 (left) and 6 (right)
-P5_TEXT_LEN = 190
+P5_TEXT_LEN = 152
 p5_text_data
-    dta $3F, $93, $93, $3F, $03, $03, $03, $00, $00, $00 ; P
-    dta $3F, $93, $93, $3F, $27, $33, $93, $00, $00, $00 ; R
-    dta $BF, $03, $03, $BF, $03, $03, $BF, $00, $00, $00 ; E
-    dta $BD, $03, $09, $2C, $30, $90, $3F, $00, $00, $00 ; S
-    dta $BD, $03, $09, $2C, $30, $90, $3F, $00, $00, $00 ; S
-    dta $00, $00, $00, $00, $00, $00, $00, $00, $00, $00 ;  
-    dta $BF, $03, $03, $BF, $03, $03, $03, $00, $00, $00 ; F
-    dta $24, $24, $24, $24, $24, $24, $24, $00, $00, $00 ; I
-    dta $3F, $93, $93, $3F, $27, $33, $93, $00, $00, $00 ; R
-    dta $BF, $03, $03, $BF, $03, $03, $BF, $00, $00, $00 ; E
-    dta $00, $00, $00, $00, $00, $00, $00, $00, $00, $00 ;  
-    dta $FF, $24, $24, $24, $24, $24, $24, $00, $00, $00 ; T
-    dta $2C, $39, $93, $93, $93, $39, $2C, $00, $00, $00 ; O
-    dta $00, $00, $00, $00, $00, $00, $00, $00, $00, $00 ;  
-    dta $BD, $03, $09, $2C, $30, $90, $3F, $00, $00, $00 ; S
-    dta $FF, $24, $24, $24, $24, $24, $24, $00, $00, $00 ; T
-    dta $04, $2C, $2C, $39, $3D, $93, $93, $00, $00, $00 ; A
-    dta $3F, $93, $93, $3F, $27, $33, $93, $00, $00, $00 ; R
-    dta $FF, $24, $24, $24, $24, $24, $24, $00, $00, $00 ; T
+    dta $00, $3F, $93, $93, $3F, $03, $03, $03 ; P
+    dta $00, $3F, $93, $93, $3F, $27, $33, $93 ; R
+    dta $00, $BF, $03, $03, $BF, $03, $03, $BF ; E
+    dta $00, $BD, $03, $09, $2C, $30, $90, $3F ; S
+    dta $00, $BD, $03, $09, $2C, $30, $90, $3F ; S
+    dta $00, $00, $00, $00, $00, $00, $00, $00 ;  
+    dta $00, $BF, $03, $03, $BF, $03, $03, $03 ; F
+    dta $00, $24, $24, $24, $24, $24, $24, $24 ; I
+    dta $00, $3F, $93, $93, $3F, $27, $33, $93 ; R
+    dta $00, $BF, $03, $03, $BF, $03, $03, $BF ; E
+    dta $00, $00, $00, $00, $00, $00, $00, $00 ;  
+    dta $00, $FF, $24, $24, $24, $24, $24, $24 ; T
+    dta $00, $2C, $39, $93, $93, $93, $39, $2C ; O
+    dta $00, $00, $00, $00, $00, $00, $00, $00 ;  
+    dta $00, $BD, $03, $09, $2C, $30, $90, $3F ; S
+    dta $00, $FF, $24, $24, $24, $24, $24, $24 ; T
+    dta $00, $04, $2C, $2C, $39, $3D, $93, $93 ; A
+    dta $00, $3F, $93, $93, $3F, $27, $33, $93 ; R
+    dta $00, $FF, $24, $24, $24, $24, $24, $24 ; T
 
 

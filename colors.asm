@@ -46,8 +46,10 @@ TITLE_P3_COLOR          = $84       ; Kolor gracza 3 / PCOLR3 (litery SOBIE prze
 ; Rejestr PRIOR bit 4 ($10) włącza tryb 5. gracza.
 ; Kolor 5. gracza pochodzi z COLPF3 / COLOR3.
 TITLE_P5_COLOR          = $0E       ; Kolor 5. gracza (biel/jasny dla napisu PRESS FIRE TO START)
-TITLE_P5_X              = 200       ; Pozycja pozioma z prawego brzegu ekranu (HPOSM0..HPOSM3, szerokość 8 clk)
-TITLE_P5_Y              = 33        ; Pozycja pionowa Y w buforze PMG_MISSILES
+TITLE_P5_X              = 180       ; Pozycja bazowa X (środek fali dla HPOSM0..HPOSM3)
+TITLE_P5_Y              = 48        ; Pozycja pionowa Y w buforze PMG_MISSILES (wiersz 2: 32 + 2*8)
 TITLE_P5_SIZEM          = $00       ; Szerokość x1 dla wszystkich 4 pocisków (%00000000)
+TITLE_P5_WAVE_SPEED     = 1         ; Prędkość przesuwania fali na klatkę
+TITLE_P5_WAVE_STEP      = 3         ; Przesunięcie fazy w tablicy sinusów pomiędzy kolejnymi wierszami
 
 

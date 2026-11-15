@@ -176,15 +176,21 @@ def generate_asm(segments: Sequence[CharsetSegment], gen_dir: Path) -> str:
     if rle_decompress(compressed) != all_glifs:
         raise TitleCompileError("ERROR: RLE round-trip verification failed.")
 
-    # Rows where DLI must fire: the LAST character row of each segment except the final segment
-    dli_rows = {(seg.end_line // 8) - 1 for seg in segments[:-1]}
-    dli_count = len(segments) - 1
+    # Fire DLI before every Mode 4 row (0..23):
+    # - 1 DLI on the 3rd DL_BLANK8 before row 0
+    # - 23 DLIs on rows 0..22 before rows 1..23
+    dli_count = 24
+    row_chbase_refs: list[str] = []
+    for row in range(24):
+        line_y = row * 8
+        seg_idx = next(seg.index for seg in segments if seg.start_line <= line_y < seg.end_line)
+        row_chbase_refs.append(f">title_charset_{seg_idx}")
 
     lines: list[str] = [
         "; ==============================================================================",
         "; GEN/TITLE_SCREEN_DATA.ASM — Auto-generated Title Screen Data (DO NOT EDIT)",
         f"; Raw size: {len(all_glifs)} bytes | RLE compressed size: {len(compressed)} bytes",
-        f"; Charsets: {len(segments)} | DLI switches: {dli_count} (at rows: {sorted(dli_rows)})",
+        f"; Charsets: {len(segments)} | Per-row DLI entries: {dli_count} (rows 0..23)",
         "; ==============================================================================",
         "",
         f"TITLE_CHARSET_COUNT = {len(segments)}",
@@ -192,15 +198,11 @@ def generate_asm(segments: Sequence[CharsetSegment], gen_dir: Path) -> str:
         f"GAME_FONT_GLYPH_OFFSET = {segments[-1].unique_characters}",
         f"GAME_FONT_GLYPH_COUNT  = {segments[-1].filled_glyphs}",
         "",
-        "; --- Table of CHBASE high bytes for each DLI zone transition ---",
+        "; --- Table of CHBASE high bytes for each Mode 4 row (0..23) ---",
         "title_dli_chbase",
+        f"    dta {', '.join(row_chbase_refs[:12])}",
+        f"    dta {', '.join(row_chbase_refs[12:])}",
     ]
-
-    if dli_count > 0:
-        chbase_refs = ", ".join(f">title_charset_{seg.index}" for seg in segments[1:])
-        lines.append(f"    dta {chbase_refs}")
-    else:
-        lines.append("    dta >title_charset_0")
 
     lines.extend(
         [
@@ -215,13 +217,13 @@ def generate_asm(segments: Sequence[CharsetSegment], gen_dir: Path) -> str:
     # Display list rows helper macro/block (to be placed inside 1KB-aligned DLIST segment)
     dlist_lines: list[str] = [
         "title_dlist",
-        "    dta DL_BLANK8, DL_BLANK8, DL_BLANK8",
+        "    dta DL_BLANK8, DL_BLANK8, DL_BLANK8 | DL_DLI",
     ]
     for row in range(24):
         mods: list[str] = ["DL_MODE_4"]
         if row == 0:
             mods.append("DL_LMS")
-        if row in dli_rows:
+        if row < 23:
             mods.append("DL_DLI")
         mode_expr = " | ".join(mods)
         if row == 0:
