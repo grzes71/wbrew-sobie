@@ -149,6 +149,11 @@ state_update_hi
 ; --- Auto-generated Title Screen Data, Display Lists ($3400) & Charsets ($4000) ---
     icl 'gen/title_screen_data.asm'
 
+; --- Audio Player and Title Music Data Segment ($5000) ---
+    org $5000
+    icl 'lib/player.asm'
+    icl 'gen/title_music.asm'
+
 ; --- DOS Binary Run Address ---
     run main
 

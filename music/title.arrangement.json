@@ -1,0 +1,258 @@
+{
+  "schema_id": "atari-music/xex-arrangement-manifest/1",
+  "composition": {
+    "title": "Against One's Own Will",
+    "author": "Retro Space Unit",
+    "source_path": "C:\\Temp\\wbrew_sobie_intro3.dsl",
+    "source_kind": "dsl",
+    "key": "D",
+    "mode": "minor",
+    "tempo_bpm": 140,
+    "frames_per_tick": 4,
+    "pattern_count": 6,
+    "sequence_length": 8,
+    "duration_seconds": 40.96,
+    "base_uses_16bit_bass": true,
+    "base_ir_sha256": "c15dbe83410db8488bbabf60f8b11f0dcc7400af306ea44cf7ea6309391e0920",
+    "musical_fingerprint": "3abe72ec33a6aa1321f0b4caaa786e3592bf457cffa7484f53e7d1ba55d5e5d6",
+    "arranged_ir_sha256": "2cee54a014759885d3766cdf3dacb31884d485dc010ea77dcc679c3dc358f741"
+  },
+  "arrangement": {
+    "target_backend": "xex_v2",
+    "resolved_target_backend": "xex_v2",
+    "requested_player_version": "auto",
+    "effective_format_version": 2,
+    "program_change_policy": "preserve",
+    "effective_uses_16bit_bass": true,
+    "effective_audctl": 16,
+    "effective_audctl_hex": "$10",
+    "channel_assignments": {
+      "1": null,
+      "2": null,
+      "3": "lead_c1_octave_pulse",
+      "4": "perc_hihat_closed"
+    },
+    "channels": {
+      "1": {
+        "channel": 1,
+        "assigned_instrument_id": null,
+        "assignment_mode": "original",
+        "effective_instrument_name": "Bass",
+        "role": "bass",
+        "active": true,
+        "note_count": 112,
+        "midi_min": 26,
+        "midi_max": 49,
+        "has_program_changes": false,
+        "program_change_count": 0,
+        "is_16bit": true,
+        "catalog_profile": null
+      },
+      "2": {
+        "channel": 2,
+        "assigned_instrument_id": null,
+        "assignment_mode": "locked_16bit_slave",
+        "effective_instrument_name": "Locked (CH1+CH2 16-bit slave)",
+        "role": "bass",
+        "active": false,
+        "note_count": 0,
+        "midi_min": null,
+        "midi_max": null,
+        "has_program_changes": false,
+        "program_change_count": 0,
+        "is_16bit": true,
+        "catalog_profile": null
+      },
+      "3": {
+        "channel": 3,
+        "assigned_instrument_id": "lead_c1_octave_pulse",
+        "assignment_mode": "catalog_override",
+        "effective_instrument_name": "C1 Octave Pulse Lead (lead_c1_octave_pulse)",
+        "role": "melody",
+        "active": true,
+        "note_count": 98,
+        "midi_min": 61,
+        "midi_max": 81,
+        "has_program_changes": false,
+        "program_change_count": 0,
+        "is_16bit": false,
+        "catalog_profile": {
+          "instrument_id": "lead_c1_octave_pulse",
+          "display_name": "C1 Octave Pulse Lead",
+          "family": "lead",
+          "intended_roles": [
+            "melody"
+          ],
+          "base_distortion": 160,
+          "base_distortion_hex": "$A0",
+          "waveform_family": "pure",
+          "divider_mode": "8bit",
+          "preferred_clock_hz": "64khz",
+          "required_audctl_bits": 0,
+          "poly4_safe_tuning": false,
+          "midi_range": [
+            48,
+            91
+          ],
+          "behavior_id": "beh_octave_pulse_v1",
+          "runtime_tier": "core_v1",
+          "modulation_mode": "octave_pulse",
+          "envelope": {
+            "attack_frames": 0,
+            "decay_frames": 4,
+            "sustain_vol": 8,
+            "release_frames": 2,
+            "peak_vol": 15
+          }
+        }
+      },
+      "4": {
+        "channel": 4,
+        "assigned_instrument_id": "perc_hihat_closed",
+        "assignment_mode": "catalog_override",
+        "effective_instrument_name": "Closed Poly Hi-Hat (perc_hihat_closed)",
+        "role": "percussion",
+        "active": true,
+        "note_count": 122,
+        "midi_min": 60,
+        "midi_max": 60,
+        "has_program_changes": false,
+        "program_change_count": 0,
+        "is_16bit": false,
+        "catalog_profile": {
+          "instrument_id": "perc_hihat_closed",
+          "display_name": "Closed Poly Hi-Hat",
+          "family": "percussion",
+          "intended_roles": [
+            "percussion",
+            "rhythm"
+          ],
+          "base_distortion": 128,
+          "base_distortion_hex": "$80",
+          "waveform_family": "poly17_noise",
+          "divider_mode": "8bit",
+          "preferred_clock_hz": "64khz",
+          "required_audctl_bits": 0,
+          "poly4_safe_tuning": false,
+          "midi_range": [
+            48,
+            96
+          ],
+          "behavior_id": "beh_perc_hihat",
+          "runtime_tier": "core_v2_iter1",
+          "modulation_mode": "none",
+          "envelope": {
+            "attack_frames": 0,
+            "decay_frames": 2,
+            "sustain_vol": 0,
+            "release_frames": 1,
+            "peak_vol": 12
+          }
+        }
+      }
+    },
+    "arranged_instruments": [
+      {
+        "id": 0,
+        "name": "Bass",
+        "profile_id": null,
+        "behavior_id": null,
+        "role": "bass",
+        "distortion": 160,
+        "distortion_hex": "$A0",
+        "is_16bit": true,
+        "audctl": null,
+        "audctl_hex": null,
+        "modulation": 0,
+        "envelope": {
+          "attack_frames": 0,
+          "decay_frames": 4,
+          "sustain_vol": 11,
+          "release_frames": 2
+        }
+      },
+      {
+        "id": 1,
+        "name": "C1 Octave Pulse Lead",
+        "profile_id": "lead_c1_octave_pulse",
+        "behavior_id": "beh_octave_pulse_v1",
+        "role": "melody",
+        "distortion": 160,
+        "distortion_hex": "$A0",
+        "is_16bit": false,
+        "audctl": null,
+        "audctl_hex": null,
+        "modulation": 1,
+        "envelope": {
+          "attack_frames": 0,
+          "decay_frames": 4,
+          "sustain_vol": 8,
+          "release_frames": 2
+        }
+      },
+      {
+        "id": 2,
+        "name": "Closed Poly Hi-Hat",
+        "profile_id": "perc_hihat_closed",
+        "behavior_id": "beh_perc_hihat",
+        "role": "percussion",
+        "distortion": 128,
+        "distortion_hex": "$80",
+        "is_16bit": false,
+        "audctl": null,
+        "audctl_hex": null,
+        "modulation": 0,
+        "envelope": {
+          "attack_frames": 0,
+          "decay_frames": 2,
+          "sustain_vol": 0,
+          "release_frames": 1
+        }
+      }
+    ]
+  },
+  "export": {
+    "xex_file": "wbrew_sobie_intro3.xex",
+    "asm_file": "wbrew_sobie_intro3.asm",
+    "arrangement_json_file": "wbrew_sobie_intro3.arrangement.json",
+    "xex_size_bytes": 4308,
+    "music_data_size_bytes": 1613,
+    "format_version": 2,
+    "player_address": 24576,
+    "player_address_hex": "$6000",
+    "music_address": 32768,
+    "music_address_hex": "$8000",
+    "zp_base": 128,
+    "zp_base_hex": "$80",
+    "segments": [
+      {
+        "start": 24576,
+        "end": 27254,
+        "start_hex": "$6000",
+        "end_hex": "$6A76",
+        "size_bytes": 2679,
+        "role": "player (harness + player code)"
+      },
+      {
+        "start": 32768,
+        "end": 34380,
+        "start_hex": "$8000",
+        "end_hex": "$864C",
+        "size_bytes": 1613,
+        "role": "song data"
+      },
+      {
+        "start": 736,
+        "end": 737,
+        "start_hex": "$02E0",
+        "end_hex": "$02E1",
+        "size_bytes": 2,
+        "role": "DOS RUN/INIT vector"
+      }
+    ]
+  },
+  "diagnostics": {
+    "warnings": [],
+    "items": []
+  }
+}

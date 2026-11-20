@@ -35,10 +35,11 @@ make all
 
 Kolejność etapów `make all`:
 1. `assets` — konwersja obrazu tytułowego (`images/title.png`) do zestawów znaków ANTIC 4 (`.fnt`) oraz metadanych JSON (`scripts/png_to_charset.py`).
-2. `data` — kompilacja metadanych JSON do spakowanych danych RLE, Display Listy oraz tablic DLI w plikach ASM w katalogu `gen/` (`scripts/compile_title_screen.py`).
-3. `xex` — asemblacja `main.asm` przy użyciu MADS do pliku wynikowego `funky_koval.xex` (wraz z plikami `.lst` i `.lab` w `gen/`).
-4. `tests` — uruchomienie testów automatycznych (`python -m pytest -v`), w tym testów logiki 6502 w emulatorze `py65` oraz testów edytora Sprite Studio.
-5. `check_memory` — walidacja mapy pamięci pliku `funky_koval.xex` (`scripts/check_memory.py`, weryfikacja granicy `$BFFF` poniżej ROM systemu OS).
+2. `data` — kompilacja metadanych JSON do spakowanych danych RLE, Display Listy oraz 24-wierszowych tablic DLI w katalogu `gen/` (`scripts/compile_title_screen.py`).
+3. `audio` — walidacja i kompilacja utworu tytułowego ([`music/title.dsl`](music/title.dsl)) oraz pliku aranżacji ([`music/title.arrangement.json`](music/title.arrangement.json)) do kodu MADS (`gen/title_music.asm`, format v2 SoA) przez skrypt [`scripts/compile_music.py`](scripts/compile_music.py) i wbudowany katalog pakietu `atari_music`.
+4. `xex` — asemblacja `main.asm` przy użyciu MADS do pliku wynikowego `funky_koval.xex` (wraz z plikami `.lst` i `.lab` w `gen/`).
+5. `tests` — uruchomienie testów automatycznych (`python -m pytest -v`), w tym testów logiki 6502 (RLE, PMG, fala sinusowa DLI, odtwarzacz POKEY v2) w emulatorze `py65` oraz testów edytora Sprite Studio.
+6. `check_memory` — walidacja mapy pamięci pliku `funky_koval.xex` (`scripts/check_memory.py`, weryfikacja granicy `$BFFF` poniżej ROM systemu OS).
 
 Pozostałe cele `Makefile`:
 - `make run` — uruchomienie `funky_koval.xex` w emulatorze AltirraSDL.
@@ -66,9 +67,10 @@ Uruchomienie edytora:
 | [`hardware.asm`](hardware.asm) | Definicje rejestrów sprzętowych ANTIC, GTIA, POKEY, PIA |
 | [`colors.asm`](colors.asm) | Globalna paleta kolorów oraz konfiguracja elementów PMG ekranu tytułowego |
 | [`zeropage.asm`](zeropage.asm) | Alokacje zmiennych na stronie zerowej (`$80`–`$FF`) |
-| [`engine/`](engine/) | Moduły silnika: obsługa przerwań DLI ([`dli.asm`](engine/dli.asm)), odczyt joysticka ([`input.asm`](engine/input.asm)) |
-| [`lib/`](lib/) | Biblioteki pomocnicze 6502: obsługa PMG ([`pmg.asm`](lib/pmg.asm)), dekompresja RLE ([`rle.asm`](lib/rle.asm)) |
-| [`scenes/`](scenes/) | Sceny gry: ekran tytułowy ([`title.asm`](scenes/title.asm)), gra ([`game.asm`](scenes/game.asm)), ekran końcowy ([`gameover.asm`](scenes/gameover.asm)) |
+| [`engine/`](engine/) | Moduły silnika: obsługa przerwań DLI ([`dli.asm`](engine/dli.asm) — przełączanie `CHBASE` i pozycji `HPOSM0..HPOSM3` co wiersz), odczyt joysticka ([`input.asm`](engine/input.asm)) |
+| [`lib/`](lib/) | Biblioteki pomocnicze 6502: obsługa PMG ([`pmg.asm`](lib/pmg.asm)), dekompresja RLE ([`rle.asm`](lib/rle.asm)), relokowalny 4-kanałowy odtwarzacz muzyki POKEY v2 ([`player.asm`](lib/player.asm)) |
+| [`scenes/`](scenes/) | Sceny gry: ekran tytułowy ([`title.asm`](scenes/title.asm) — grafika ANTIC 4, napisy PMG, animacja falowa 5. gracza i muzyka tytułowa), gra ([`game.asm`](scenes/game.asm)), ekran końcowy ([`gameover.asm`](scenes/gameover.asm)) |
+| [`music/`](music/) | Źródłowe kompozycje muzyczne w formacie Music DSL ([`title.dsl`](music/title.dsl)) oraz manifesty aranżacji ([`title.arrangement.json`](music/title.arrangement.json)) |
 | [`scripts/`](scripts/) | Narzędzia Python do konwersji grafiki, kompilacji danych i walidacji mapy pamięci |
 | [`sprite_studio/`](sprite_studio/) | Edytor GUI (PySide6) sprajtów i klatek animacji |
 | [`sprites/`](sprites/) | Dane źródłowe sprajtów (`project.sprite.json`) |

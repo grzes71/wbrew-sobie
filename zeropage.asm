@@ -28,3 +28,7 @@ zp_pmg_margin       = $95   ; Margines (odstęp) w liniach pomiędzy znakami dla
 zp_pmg_invert       = $96   ; Flaga inwersji znaku: 0 = normalny, $FF = inwersja (1 bajt)
 zp_p5_wave_phase    = $97   ; Bieżąca faza fali sinusowej dla 5. gracza (1 bajt)
 
+; --- Audio Player Zero Page Base ($A0-$A9) ---
+PLAYER_ZP_BASE      = $A0
+
+

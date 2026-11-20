@@ -229,6 +229,12 @@
     sta DMACTL
     lda #$C0
     sta NMIEN
+
+    ; 9. Initialize and start title music playback
+    ldx #<song_data
+    ldy #>song_data
+    jsr music_init
+    jsr music_play
     rts
 .endp
 
@@ -246,6 +252,9 @@ text_spaces
 TEXT_SPACES_LEN = 5
 
 .proc title_update
+    ; Advance title music playback
+    jsr music_update
+
     ; Keep top-of-frame DLI index and base charset synchronized every VBLANK
     lda #0
     sta zp_dli_idx
@@ -258,6 +267,7 @@ TEXT_SPACES_LEN = 5
     ; Transition TITLE_SCREEN -> GAME on FIRE press
     lda zp_fire_pressed
     beq @stay
+    jsr music_stop
     lda #STATE_GAME
     sta zp_next_state
 @stay
