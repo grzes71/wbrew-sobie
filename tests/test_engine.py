@@ -394,3 +394,46 @@ def test_title_pmg_subtitle_setup(emu: tuple[MPU, bytearray, dict[str, int]]) ->
     updated_row_xs = list(mem[p5_row_x_addr : p5_row_x_addr + 24])
     assert all(base_x - 20 <= x <= base_x + 20 for x in updated_row_xs)
     assert updated_row_xs != initial_row_xs
+
+
+def test_title_music_playback(emu: tuple[MPU, bytearray, dict[str, int]]) -> None:
+    """Verify that title screen initializes, advances, and stops title music correctly."""
+    from scripts.compile_music import load_arrangement_config
+
+    mpu, mem, labels = emu
+
+    arrangement_path = ROOT_DIR / "music" / "title.arrangement.json"
+    arrangement_raw = json.loads(arrangement_path.read_text(encoding="utf-8"))
+    expected_audctl = int(arrangement_raw["arrangement"]["effective_audctl"])
+    arr_cfg = load_arrangement_config(arrangement_path)
+    assert arr_cfg.player_version == "v2"
+    assert arr_cfg.channel_assignments == {
+        int(ch): str(inst)
+        for ch, inst in arrangement_raw["arrangement"]["channel_assignments"].items()
+        if inst is not None
+    }
+
+    # 1. Run title_enter -> starts music playback
+    run_subroutine(mpu, labels["TITLE_ENTER"])
+    assert mem[labels["MUSIC_PLAYING"]] == 1
+    assert mem[labels["AUDCTL_MODE"]] == expected_audctl
+    assert mem[labels["AUDCTL_MODE"]] == mem[labels["SONG_DATA"] + 1]
+
+    # 2. Run title_update across multiple frames -> music ticks advance and write to POKEY
+    audc_addrs = [0xD201, 0xD203, 0xD205, 0xD207]
+    mem[labels["ZP_FIRE_PRESSED"]] = 0
+    for _ in range(8):
+        run_subroutine(mpu, labels["TITLE_UPDATE"])
+
+    assert mem[labels["MUSIC_PLAYING"]] == 1
+    # At least one channel should have non-zero volume/distortion written
+    assert any(mem[addr] != 0 for addr in audc_addrs)
+
+    # 3. Simulate FIRE press during title_update -> transitions to STATE_GAME and silences POKEY
+    mem[labels["ZP_FIRE_PRESSED"]] = 1
+    run_subroutine(mpu, labels["TITLE_UPDATE"])
+    assert mem[labels["ZP_NEXT_STATE"]] == labels["STATE_GAME"]
+    assert mem[labels["MUSIC_PLAYING"]] == 0
+    # All POKEY audio channels silenced
+    assert all(mem[addr] == 0 for addr in audc_addrs)
+

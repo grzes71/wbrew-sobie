@@ -2,6 +2,29 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-20] - Remove Redundant Local `data/instruments/catalog.json`
+- Removed redundant `data/instruments/catalog.json` from the repository, upgraded `atari_music` to `v0.17.1` in [requirements.txt](requirements.txt), and updated [Makefile](Makefile) and [README.md](README.md) to rely on the built-in instrument catalog packaged inside `atari_music`.
+
+
+## [2026-11-20] - Drive Title Music Arrangement from `music/title.arrangement.json`
+- Added [scripts/compile_music.py](scripts/compile_music.py) to parse `channel_assignments`, `program_change_policy`, and `player_version` from [music/title.arrangement.json](music/title.arrangement.json) and invoke `atari_music` (`import-dsl` + `arrange`) on [music/title.dsl](music/title.dsl).
+- Updated [Makefile](Makefile) `audio` target to depend on [music/title.arrangement.json](music/title.arrangement.json) and compile [gen/title_music.asm](gen/title_music.asm) via [scripts/compile_music.py](scripts/compile_music.py).
+- Updated `test_title_music_playback` in [tests/test_engine.py](tests/test_engine.py) to derive expected `AUDCTL` and channel mapping dynamically from [music/title.arrangement.json](music/title.arrangement.json), and updated [README.md](README.md).
+
+
+## [2026-11-17] - AI Composition Prompt System Upgrade (`atari-music` `ai-compose`)
+- Updated [.agents/skills/atari-music-composer/SKILL.md](.agents/skills/atari-music-composer/SKILL.md) with the new opt-in `ai-compose` options (`--prompt-profile rich`, `--key`, `--mode`, `--notes`, `--tempo-grid`, `--plan-first`, `--quality-passes`) implemented in `atari-music` (`feat/rich-prompts`).
+- Updated [README.md](README.md) with the `audio` build stage (`music/title.dsl`, `data/instruments/catalog.json`, `lib/player.asm`) and per-row DLI sine-wave animation in `engine/dli.asm` and `scenes/title.asm`.
+
+
+## [2026-11-17] - Title Screen Music Playback Integration (atari-music v2)
+- Added `music/title.dsl` ("Shadow of the Citadel", 136 BPM, 16-bit POKEY bass on CH1+CH2) and SSOT instrument catalog in [data/instruments/catalog.json](data/instruments/catalog.json).
+- Integrated `atari-music import-dsl` and `atari-music arrange` (--channel-instrument 1=bass_16bit_pure 3=lead_pure_pluck 4=perc_hihat_closed --program-change-policy replace --player-version v2) into [Makefile](Makefile) generating [gen/title_music.asm](gen/title_music.asm).
+- Integrated relocatable 4-channel POKEY v2 player in [lib/player.asm](lib/player.asm) at `org $5000` with zero page allocation `PLAYER_ZP_BASE = $A0` in [zeropage.asm](zeropage.asm) and sequential assembly in [main.asm](main.asm).
+- Hooked music playback into title state in [scenes/title.asm](scenes/title.asm): `music_init` and `music_play` in `title_enter`, per-frame `music_update` in `title_update`, and `music_stop` when exiting to `STATE_GAME` on FIRE press.
+- Added automated integration test `test_title_music_playback` in [tests/test_engine.py](tests/test_engine.py) (py65) and verified live playback with AltirraSDL / AltirraBridge.
+
+
 ## [2026-11-15] - Sine-Wave Animation for Fifth Player Text via Per-Row DLI
 - Configured `TITLE_P5_Y = 48`, `TITLE_P5_WAVE_SPEED = 1`, and `TITLE_P5_WAVE_STEP = 3` in [colors.asm](colors.asm), and added `zp_p5_wave_phase = $97` in [zeropage.asm](zeropage.asm).
 - Updated [scripts/compile_title_screen.py](scripts/compile_title_screen.py) to emit `TITLE_DLI_COUNT = 24`, per-row `title_dli_chbase` entries (rows `0..23`), and `DL_DLI` before every Mode 4 row (`3rd DL_BLANK8` + rows `0..22`) in `title_dlist`.
