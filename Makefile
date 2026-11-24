@@ -23,6 +23,7 @@ TITLE_DATA_ASM  := $(GEN_DIR)/title_screen_data.asm
 
 TITLE_DSL           := music/title.dsl
 TITLE_ARRANGEMENT   := music/title.arrangement.json
+INSTRUMENT_CATALOG  := data/instruments/catalog.json
 TITLE_MUSIC_JSON    := $(GEN_DIR)/title_music.json
 TITLE_MUSIC_ASM     := $(GEN_DIR)/title_music.asm
 
@@ -57,9 +58,9 @@ $(TITLE_DATA_ASM): $(TITLE_JSON) scripts/compile_title_screen.py
 # ------------------------------------------------------------------------------
 audio: $(TITLE_MUSIC_ASM)
 
-$(TITLE_MUSIC_JSON) $(TITLE_MUSIC_ASM): $(TITLE_DSL) $(TITLE_ARRANGEMENT) scripts/compile_music.py
+$(TITLE_MUSIC_JSON) $(TITLE_MUSIC_ASM): $(TITLE_DSL) $(TITLE_ARRANGEMENT) $(INSTRUMENT_CATALOG) scripts/compile_music.py
 	@$(MKDIR) $(GEN_DIR)
-	$(PYTHON) scripts/compile_music.py --dsl $(TITLE_DSL) --arrangement $(TITLE_ARRANGEMENT) --json-output $(TITLE_MUSIC_JSON) --asm-output $(TITLE_MUSIC_ASM)
+	$(PYTHON) scripts/compile_music.py --dsl $(TITLE_DSL) --arrangement $(TITLE_ARRANGEMENT) --catalog $(INSTRUMENT_CATALOG) --json-output $(TITLE_MUSIC_JSON) --asm-output $(TITLE_MUSIC_ASM)
 
 # ------------------------------------------------------------------------------
 # 4. Binary assembly (MADS)

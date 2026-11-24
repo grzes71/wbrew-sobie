@@ -2,6 +2,38 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-24] - Fix `make all` Audio Build (`CATALOG_NOT_FOUND`)
+- Restored [data/instruments/catalog.json](data/instruments/catalog.json) matching the pinned `atari_music` `v0.17.1` wheel (whose package distribution omits `data/instruments/catalog.json`).
+- Updated [Makefile](Makefile) to declare `INSTRUMENT_CATALOG := data/instruments/catalog.json` as an `audio` dependency and pass `--catalog $(INSTRUMENT_CATALOG)` to [scripts/compile_music.py](scripts/compile_music.py), and updated [README.md](README.md).
+
+
+## [2026-11-24] - Add `--colors` Color Mapping Option to `png_to_charset.py`
+- Added `parse_color_map`, `format_color_map`, and `--colors` / `--color-map` CLI option to [scripts/png_to_charset.py](scripts/png_to_charset.py), supporting positional 2-bit codes (`00,10,11,01`), ANTIC 4 register aliases (`bk,pf0,pf1,pf2`), and explicit `index=target` pairs (indices `0..255`), rejecting duplicate target codes.
+- Updated `validate_image`, `extract_and_build_charset`, `extract_all_charsets`, and `process_image_to_charset` to apply the mapping and write `color_map` to the generated JSON metadata.
+- Regenerated [gen/title_charsets.json](gen/title_charsets.json) and expanded unit tests in [tests/test_png_to_charset.py](tests/test_png_to_charset.py).
+
+
+## [2026-11-24] - Reserve Empty Glyph at Index 0 in `png_to_charset.py`
+- Updated `extract_and_build_charset` in [scripts/png_to_charset.py](scripts/png_to_charset.py) to initialize `unique_patterns` with `EMPTY_GLYPH` (`b"\x00" * 8`) at index `0`, guaranteeing index `0` is always reserved as an empty character in every generated `.fnt` charset.
+- Added unit tests in [tests/test_png_to_charset.py](tests/test_png_to_charset.py) covering non-empty-only images, empty tile reuse at index `0`, multi-band splitting, and `--fill-font` offset preservation.
+
+
+## [2026-11-24] - Layered Overlap Rules, Z-Order, and Room Composition in Room Editor
+- Updated [room_editor/model/project.py](room_editor/model/project.py) so overlap checks enforce non-overlap only between blockable (`non-blockable = false`) non-zero cells, added `compose_room` / `compose_room_with_sources` (Layer 1 `non-blockable` in z-order, Layer 2 blockable on top, code `0` transparent), updated `find_instance_at` to target the topmost visible cell, added `find_blockable_overlaps_for_object`, and updated `Project.__eq__` to preserve non-blockable z-order.
+- Updated [room_editor/model/tools.py](room_editor/model/tools.py) and [room_editor/model/commands.py](room_editor/model/commands.py) so line/rect/fill skip room overlap checks for `non-blockable` objects, and added undoable z-order commands (`ReorderNonBlockableCommand`, `BringToFrontCommand`, `SendToBackCommand`, `MoveInstanceUpCommand`, `MoveInstanceDownCommand`).
+- Updated [room_editor/model/compression.py](room_editor/model/compression.py) and [room_editor/model/validation.py](room_editor/model/validation.py) to emit blockable entries first (greedy largest-rectangle) followed by non-blockable entries in exact z-order (merging only gapless consecutive row-major runs), restrict `INSTANCE_OVERLAP` errors to blockable pairs, and add `HIDDEN_NON_BLOCKABLE_INSTANCE` warnings.
+- Updated [room_editor/ui/rendering_qt.py](room_editor/ui/rendering_qt.py), [room_editor/ui/room_editor_view.py](room_editor/ui/room_editor_view.py), [room_editor/ui/main_window.py](room_editor/ui/main_window.py), and [room_editor/ui/objects_view.py](room_editor/ui/objects_view.py) to render via `compose_room`, add z-order context menu and `Edit -> Arrange` shortcuts, and refuse turning `non-blockable` off when conflicts exist.
+- Added [room_editor/SPECIFICATION.md](room_editor/SPECIFICATION.md) (v1.1), [room_editor/tests/test_layering_and_zorder.py](room_editor/tests/test_layering_and_zorder.py), and expanded tests in [room_editor/tests/test_compression_and_yaml.py](room_editor/tests/test_compression_and_yaml.py), [room_editor/tests/test_validation.py](room_editor/tests/test_validation.py), and [room_editor/tests/test_canvas_and_graph.py](room_editor/tests/test_canvas_and_graph.py).
+
+
+## [2026-11-24] - Implement Atari 8-bit ANTIC 4 Room Editor (PySide6)
+- Added [pyproject.toml](pyproject.toml), updated [requirements.txt](requirements.txt) with `PyYAML>=6.0.2`, and added the 256-entry Atari PAL GTIA RGB table in [room_editor/data/pal_palette.json](room_editor/data/pal_palette.json).
+- Implemented the Qt-free model layer under `room_editor/model/` ([room_editor/model/palette.py](room_editor/model/palette.py), [room_editor/model/charset.py](room_editor/model/charset.py), [room_editor/model/project.py](room_editor/model/project.py), [room_editor/model/graph.py](room_editor/model/graph.py), [room_editor/model/compression.py](room_editor/model/compression.py), [room_editor/model/validation.py](room_editor/model/validation.py), [room_editor/model/tools.py](room_editor/model/tools.py), [room_editor/model/commands.py](room_editor/model/commands.py)) covering 40x20 rooms, connected room groups, bidirectional teleports, passage computation, deterministic `repeat-x`/`repeat-y`/`repeat-xy` compression, validation, and undo/redo commands.
+- Implemented `.fnt` (1024-byte) loading, relative path resolution, and deterministic YAML round-trip serialization in [room_editor/io/fnt.py](room_editor/io/fnt.py) and [room_editor/io/yaml_io.py](room_editor/io/yaml_io.py).
+- Built the PySide6 GUI in `room_editor/ui/` ([room_editor/ui/main_window.py](room_editor/ui/main_window.py), [room_editor/ui/canvas_view.py](room_editor/ui/canvas_view.py), [room_editor/ui/room_editor_view.py](room_editor/ui/room_editor_view.py), [room_editor/ui/objects_view.py](room_editor/ui/objects_view.py), [room_editor/ui/settings_view.py](room_editor/ui/settings_view.py), [room_editor/ui/color_picker.py](room_editor/ui/color_picker.py), [room_editor/ui/teleport_dialog.py](room_editor/ui/teleport_dialog.py), [room_editor/ui/validation_dialog.py](room_editor/ui/validation_dialog.py), [room_editor/ui/rendering_qt.py](room_editor/ui/rendering_qt.py)) and entry points [room_editor/main.py](room_editor/main.py) and [room_editor/__main__.py](room_editor/__main__.py).
+- Added comprehensive pytest coverage (`T-1`..`T-10`, architecture isolation, undo/redo, and offscreen GUI smoke tests) in `room_editor/tests/` and documented usage in [README.md](README.md).
+
+
 ## [2026-11-20] - Remove Redundant Local `data/instruments/catalog.json`
 - Removed redundant `data/instruments/catalog.json` from the repository, upgraded `atari_music` to `v0.17.1` in [requirements.txt](requirements.txt), and updated [Makefile](Makefile) and [README.md](README.md) to rely on the built-in instrument catalog packaged inside `atari_music`.
 

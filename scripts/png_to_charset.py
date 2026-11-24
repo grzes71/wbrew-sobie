@@ -8,13 +8,150 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from PIL import Image
 
 
 class CharsetError(Exception):
     """Raised when validation, conversion, or file operations fail."""
+
+
+EMPTY_GLYPH: bytes = b"\x00" * 8
+DEFAULT_COLOR_MAP: dict[int, int] = {0: 0, 1: 1, 2: 2, 3: 3}
+COLOR_TARGET_ALIASES: dict[str, int] = {
+    "00": 0,
+    "bk": 0,
+    "colbk": 0,
+    "01": 1,
+    "pf0": 1,
+    "colpf0": 1,
+    "10": 2,
+    "pf1": 2,
+    "colpf1": 2,
+    "11": 3,
+    "pf2": 3,
+    "colpf2": 3,
+    "pf3": 3,
+    "colpf3": 3,
+}
+BIT_PAIR_LABELS: dict[int, str] = {
+    0: "00 (COLBK)",
+    1: "01 (COLPF0)",
+    2: "10 (COLPF1)",
+    3: "11 (COLPF2/3)",
+}
+
+
+def _parse_target_token(token: str) -> int:
+    key = token.strip().lower()
+    if key not in COLOR_TARGET_ALIASES:
+        raise CharsetError(
+            f"ERROR: Invalid ANTIC 4 target color '{token.strip()}'. "
+            "Use 00/01/10/11 or bk/pf0/pf1/pf2."
+        )
+    return COLOR_TARGET_ALIASES[key]
+
+
+def _resolve_color_map(color_map: Mapping[int, int] | None) -> dict[int, int]:
+    """Validate and normalize a PNG-index -> 2-bit-code mapping."""
+    if color_map is None:
+        return dict(DEFAULT_COLOR_MAP)
+    if not (1 <= len(color_map) <= 4):
+        raise CharsetError(
+            f"ERROR: Color mapping must define between 1 and 4 entries; got {len(color_map)}."
+        )
+    resolved: dict[int, int] = {}
+    used_targets: set[int] = set()
+    for src, dst in color_map.items():
+        if isinstance(src, bool) or not isinstance(src, int) or not (0 <= src <= 255):
+            raise CharsetError(f"ERROR: Source palette index must be in 0..255; got {src!r}.")
+        if isinstance(dst, bool) or not isinstance(dst, int) or not (0 <= dst <= 3):
+            raise CharsetError(f"ERROR: Target 2-bit color code must be in 0..3; got {dst!r}.")
+        if dst in used_targets:
+            raise CharsetError(
+                f"ERROR: Duplicate target color code '{dst:02b}'; each PNG color must map to a unique ANTIC 4 code."
+            )
+        used_targets.add(dst)
+        resolved[src] = dst
+    return resolved
+
+
+def parse_color_map(spec: str | None) -> dict[int, int]:
+    """Parse --colors specification into a PNG palette index -> 2-bit code dict.
+
+    Supports:
+      - None: default {0: 0, 1: 1, 2: 2, 3: 3}
+      - Positional 4-item list for PNG indices 0..3: '00,10,11,01' or 'bk,pf1,pf2,pf0'
+      - Explicit 1..4 pairs for arbitrary PNG indices 0..255: '0=00,5=10,9=11,12=01' (or ':')
+    """
+    if spec is None:
+        return dict(DEFAULT_COLOR_MAP)
+
+    stripped = spec.strip()
+    if not stripped:
+        raise CharsetError("ERROR: --colors specification cannot be empty.")
+
+    tokens = [part.strip() for part in stripped.split(",")]
+    if any(not tok for tok in tokens):
+        raise CharsetError(f"ERROR: Empty entry in --colors specification: '{spec}'.")
+
+    has_sep = [("=" in tok or ":" in tok) for tok in tokens]
+    if any(has_sep):
+        if not all(has_sep):
+            raise CharsetError(
+                "ERROR: Cannot mix positional entries and explicit 'index=target' pairs in --colors."
+            )
+        if not (1 <= len(tokens) <= 4):
+            raise CharsetError(
+                f"ERROR: Explicit --colors mapping requires 1 to 4 entries; got {len(tokens)}."
+            )
+        mapping: dict[int, int] = {}
+        used_targets: set[int] = set()
+        for tok in tokens:
+            sep = "=" if "=" in tok else ":"
+            src_str, dst_str = tok.split(sep, 1)
+            src_str = src_str.strip()
+            if not src_str.isdigit():
+                raise CharsetError(f"ERROR: Invalid source palette index '{src_str}' in '{tok}'.")
+            src = int(src_str)
+            if not (0 <= src <= 255):
+                raise CharsetError(
+                    f"ERROR: Source palette index {src} out of range 0..255 in '{tok}'."
+                )
+            if src in mapping:
+                raise CharsetError(f"ERROR: Duplicate source palette index {src} in --colors.")
+            dst = _parse_target_token(dst_str)
+            if dst in used_targets:
+                raise CharsetError(
+                    f"ERROR: Duplicate target color code '{dst:02b}' in --colors."
+                )
+            used_targets.add(dst)
+            mapping[src] = dst
+        return mapping
+
+    if len(tokens) != 4:
+        raise CharsetError(
+            f"ERROR: Positional --colors requires exactly 4 values for PNG indices 0..3; got {len(tokens)}."
+        )
+    mapping = {}
+    used_targets = set()
+    for src, tok in enumerate(tokens):
+        dst = _parse_target_token(tok)
+        if dst in used_targets:
+            raise CharsetError(
+                f"ERROR: Duplicate target color code '{dst:02b}' in --colors."
+            )
+        used_targets.add(dst)
+        mapping[src] = dst
+    return mapping
+
+
+def format_color_map(color_map: Mapping[int, int]) -> str:
+    """Format a color mapping as a concise human-readable string."""
+    return ", ".join(
+        f"{src}->{BIT_PAIR_LABELS[dst]}" for src, dst in sorted(color_map.items())
+    )
 
 
 def encode_row_to_byte(pixels: Sequence[int]) -> int:
@@ -40,8 +177,14 @@ def encode_tile_to_bytes(tile_rows: Sequence[Sequence[int]]) -> bytes:
     return bytes(encode_row_to_byte(row) for row in tile_rows)
 
 
-def validate_image(img: Image.Image, start_line: int = 0) -> None:
-    """Validate that the image and start_line satisfy Atari 4-color charset requirements."""
+def validate_image(
+    img: Image.Image,
+    start_line: int = 0,
+    color_map: Mapping[int, int] | None = None,
+) -> None:
+    """Validate that the image, start_line, and palette indices satisfy requirements."""
+    effective_map = _resolve_color_map(color_map)
+
     if img.mode != "P":
         raise CharsetError("ERROR: Input image must be an indexed PNG (palette mode P).")
 
@@ -68,8 +211,13 @@ def validate_image(img: Image.Image, start_line: int = 0) -> None:
         used_colors = set(img.getdata())
     if len(used_colors) > 4:
         raise CharsetError(f"ERROR: Expected at most 4 used colors; found {len(used_colors)}.")
-    if not used_colors.issubset({0, 1, 2, 3}):
-        raise CharsetError("ERROR: Used palette indices must be within 0, 1, 2, and 3.")
+    unmapped = sorted(used_colors - set(effective_map.keys()))
+    if unmapped:
+        allowed = ", ".join(str(k) for k in sorted(effective_map.keys()))
+        bad = ", ".join(str(k) for k in unmapped)
+        raise CharsetError(
+            f"ERROR: Image uses unmapped palette index(es) [{bad}]; mapped indices are [{allowed}]."
+        )
 
 
 def build_charset_filename(base_font_path: Path, index: int) -> Path:
@@ -80,14 +228,19 @@ def build_charset_filename(base_font_path: Path, index: int) -> Path:
 
 
 def extract_and_build_charset(
-    img: Image.Image, start_line: int = 0
+    img: Image.Image,
+    start_line: int = 0,
+    color_map: Mapping[int, int] | None = None,
 ) -> tuple[bytes, dict, int]:
     """Extract tiles from the image starting at start_line up to 128 unique glyphs.
 
+    Glyph index 0 is always reserved as an empty glyph (8 zero bytes), leaving
+    indices 1..127 for non-empty tiles while mapping any empty tiles to index 0.
     Processes full character rows (8 pixel lines per row) until the image ends
     or adding the next row would exceed 128 unique characters.
     """
-    validate_image(img, start_line)
+    effective_map = _resolve_color_map(color_map)
+    validate_image(img, start_line, color_map=effective_map)
 
     width, height = img.size
     cols = width // 4
@@ -99,7 +252,7 @@ def extract_and_build_charset(
     else:
         pixel_data = list(img.getdata())
 
-    unique_patterns: dict[bytes, int] = {}
+    unique_patterns: dict[bytes, int] = {EMPTY_GLYPH: 0}
     glifs: list[int] = []
     end_line = start_line
 
@@ -116,7 +269,9 @@ def extract_and_build_charset(
             for r in range(8):
                 y = y_start + r
                 row_offset = y * width + x_start
-                tile_rows.append(pixel_data[row_offset : row_offset + 4])
+                tile_rows.append(
+                    [effective_map[p] for p in pixel_data[row_offset : row_offset + 4]]
+                )
 
             tile_bytes = encode_tile_to_bytes(tile_rows)
 
@@ -166,9 +321,11 @@ def extract_all_charsets(
     base_font_path: Path = Path("charset.fnt"),
     start_line: int = 0,
     fill_font_path: Path | None = None,
+    color_map: Mapping[int, int] | None = None,
 ) -> tuple[list[tuple[Path, bytes]], dict]:
-    """Split image from start_line into non-overlapping row-aligned charsets (max 128 glyphs each)."""
-    validate_image(img, start_line)
+    """Split image from start_line into non-overlapping row-aligned charsets (max 128 glyphs each, index 0 reserved empty)."""
+    effective_map = _resolve_color_map(color_map)
+    validate_image(img, start_line, color_map=effective_map)
 
     _, height = img.size
     current_line = start_line
@@ -188,7 +345,9 @@ def extract_all_charsets(
 
     while current_line < height:
         font_data, segment_data, unique_count = extract_and_build_charset(
-            img, start_line=current_line
+            img,
+            start_line=current_line,
+            color_map=effective_map,
         )
 
         # If this is the final segment and fill_font was provided, fill free glyph slots
@@ -224,6 +383,7 @@ def extract_all_charsets(
         charset_idx += 1
 
     json_data = {
+        "color_map": {str(src): f"{dst:02b}" for src, dst in sorted(effective_map.items())},
         "charsets": charsets_metadata,
     }
     return charset_files, json_data
@@ -310,8 +470,10 @@ def process_image_to_charset(
     json_path: Path,
     start_line: int = 0,
     fill_font_path: Path | None = None,
+    color_map: Mapping[int, int] | None = None,
 ) -> tuple[int, int, list[dict]]:
     """Execute complete workflow from loading image to saving all charset outputs and JSON."""
+    effective_map = _resolve_color_map(color_map)
     if not input_path.exists():
         raise CharsetError(f"ERROR: Input file does not exist: {input_path}")
     if not input_path.is_file():
@@ -324,6 +486,7 @@ def process_image_to_charset(
                 base_font_path=font_path,
                 start_line=start_line,
                 fill_font_path=fill_font_path,
+                color_map=effective_map,
             )
             width, height = img.size
     except (OSError, Image.DecompressionBombError) as exc:
@@ -370,6 +533,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional path to a .fnt file whose first glyphs will fill remaining free slots in the last charset.",
     )
+    parser.add_argument(
+        "--colors",
+        "--color-map",
+        dest="colors",
+        type=str,
+        default=None,
+        help=(
+            "Map PNG palette indices to ANTIC 4 2-bit codes. "
+            "Positional for indices 0..3: '00,10,11,01' or 'bk,pf1,pf2,pf0'. "
+            "Explicit pairs: '0=00,5=10,9=11,12=01' (supports PNG indices 0..255)."
+        ),
+    )
     return parser
 
 
@@ -379,12 +554,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        color_map = parse_color_map(args.colors)
         width, height, charsets = process_image_to_charset(
             args.input,
             args.font_output,
             args.json_output,
             start_line=args.start_line,
             fill_font_path=args.fill_font,
+            color_map=color_map,
         )
     except CharsetError as err:
         sys.stderr.write(f"{err}\n")
@@ -393,6 +570,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     lines = [
         f"Input image: {args.input.name}",
         f"Image size: {width}x{height}",
+        f"Color mapping: {format_color_map(color_map)}",
         f"Charsets generated: {len(charsets)}",
     ]
     for cs in charsets:
