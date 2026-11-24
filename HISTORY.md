@@ -2,6 +2,10 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-24] - Switch to Embedded Instrument Catalog in `atari_music` v0.21.0
+- Upgraded `atari_music` to `v0.21.0` in [requirements.txt](requirements.txt) and `.venv`, using the built-in `atari_music/instruments/catalog.json` bundled in the wheel.
+- Removed redundant local `data/instruments/catalog.json`, dropped `INSTRUMENT_CATALOG` and `--catalog` from [Makefile](Makefile), and updated [README.md](README.md).
+
 ## [2026-11-24] - Fix `make all` Audio Build (`CATALOG_NOT_FOUND`)
 - Restored [data/instruments/catalog.json](data/instruments/catalog.json) matching the pinned `atari_music` `v0.17.1` wheel (whose package distribution omits `data/instruments/catalog.json`).
 - Updated [Makefile](Makefile) to declare `INSTRUMENT_CATALOG := data/instruments/catalog.json` as an `audio` dependency and pass `--catalog $(INSTRUMENT_CATALOG)` to [scripts/compile_music.py](scripts/compile_music.py), and updated [README.md](README.md).

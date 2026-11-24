@@ -36,7 +36,7 @@ make all
 Kolejność etapów `make all`:
 1. `assets` — konwersja obrazu tytułowego (`images/title.png`) do zestawów znaków ANTIC 4 (`.fnt`) oraz metadanych JSON (`scripts/png_to_charset.py`).
 2. `data` — kompilacja metadanych JSON do spakowanych danych RLE, Display Listy oraz 24-wierszowych tablic DLI w katalogu `gen/` (`scripts/compile_title_screen.py`).
-3. `audio` — walidacja i kompilacja utworu tytułowego ([`music/title.dsl`](music/title.dsl)), pliku aranżacji ([`music/title.arrangement.json`](music/title.arrangement.json)) oraz katalogu instrumentów ([`data/instruments/catalog.json`](data/instruments/catalog.json)) do kodu MADS (`gen/title_music.asm`, format v2 SoA) przez skrypt [`scripts/compile_music.py`](scripts/compile_music.py).
+3. `audio` — walidacja i kompilacja utworu tytułowego ([`music/title.dsl`](music/title.dsl)) oraz pliku aranżacji ([`music/title.arrangement.json`](music/title.arrangement.json)) do kodu MADS (`gen/title_music.asm`, format v2 SoA) przez skrypt [`scripts/compile_music.py`](scripts/compile_music.py) i wbudowany katalog pakietu `atari_music`.
 4. `xex` — asemblacja `main.asm` przy użyciu MADS do pliku wynikowego `funky_koval.xex` (wraz z plikami `.lst` i `.lab` w `gen/`).
 5. `tests` — uruchomienie testów automatycznych (`python -m pytest -v`), w tym testów logiki 6502 (RLE, PMG, fala sinusowa DLI, odtwarzacz POKEY v2) w emulatorze `py65` oraz testów edytora Sprite Studio.
 6. `check_memory` — walidacja mapy pamięci pliku `funky_koval.xex` (`scripts/check_memory.py`, weryfikacja granicy `$BFFF` poniżej ROM systemu OS).
