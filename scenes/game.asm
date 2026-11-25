@@ -2,51 +2,75 @@
 ; SCENES/GAME.ASM — Main Gameplay State (STATE_GAME)
 ; ==============================================================================
 
-.proc clear_screen_vram
-    lda #0
-    tax
-@loop
-    sta SCREEN_VRAM + $0000,x
-    sta SCREEN_VRAM + $0100,x
-    sta SCREEN_VRAM + $0200,x
-    sta SCREEN_VRAM + $02C0,x
-    inx
-    bne @loop
-    rts
-.endp
-
 .proc game_enter
+    ; 1. Disable DLI and display DMA while building room display
     lda #$40
     sta NMIEN
     lda #0
     sta SDMCTL
     sta DMACTL
 
-    jsr apply_global_palette
-    jsr clear_screen_vram
+    ; 2. Silence / disable PMG inherited from Title Screen
+    sta GRACTL
+    sta GPRIOR
+    sta PRIOR
+    sta HPOSP0
+    sta HPOSP1
+    sta HPOSP2
+    sta HPOSP3
+    sta HPOSM0
+    sta HPOSM1
+    sta HPOSM2
+    sta HPOSM3
+    sta GRAFP0
+    sta GRAFP1
+    sta GRAFP2
+    sta GRAFP3
+    sta GRAFM
 
-    ; Use standard ROM font ($E0) for placeholder game screen
-    lda #$E0
-    sta CHBAS
-    sta CHBASE
+    ; 3. Render START_ROOM into SCREEN_VRAM ($3000) and build room Display List + styles
+    ldx #START_ROOM
+    jsr room_draw
+    ldx #START_ROOM
+    jsr room_setup_display
 
-    lda #<game_dlist
+    ; 4. Install room Display List and DLI handler vector
+    lda #<room_dlist
     sta SDLSTL
     sta DLISTL
-    lda #>game_dlist
+    lda #>room_dlist
     sta SDLSTH
     sta DLISTH
 
+    lda #<room_dli_handler
+    sta VDSLST
+    lda #>room_dli_handler
+    sta VDSLST+1
+
+    ; 5. Re-enable normal playfield DMA ($22) via OS shadow (and direct DMACTL)
     lda #$22
     sta SDMCTL
     sta DMACTL
-    lda #$40
+
+    ; 6. Clear latched NMI flags and enable DLI only if room uses style changes
+    sta NMIRES
+    lda room_dli_count
+    beq @no_dli
+    lda #$C0                    ; VBI + DLI enabled
+    bne @set_nmien              ; unconditional (non-zero)
+@no_dli
+    lda #$40                    ; VBI only (uniform room style)
+@set_nmien
     sta NMIEN
     rts
 .endp
 
 .proc game_update
-    ; If FIRE pressed:
+    ; Keep top-of-frame DLI index synchronized every VBLANK
+    lda #0
+    sta zp_dli_idx
+
+    ; Wait for new FIRE press:
     ;   - Joy UP held (bit 0 of zp_joy_curr == 0) -> STATE_GAME_OVER_SUCCESS
     ;   - Otherwise -> STATE_GAME_OVER_FAILURE
     lda zp_fire_pressed

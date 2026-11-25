@@ -199,7 +199,7 @@ def test_title_dli_handler_switches_charsets(emu: tuple[MPU, bytearray, dict[str
 
 
 def test_state_machine_transitions(emu: tuple[MPU, bytearray, dict[str, int]]) -> None:
-    """Verify full state machine lifecycle: TITLE_SCREEN -> GAME -> GAME_OVER (FAILURE & SUCCESS) -> TITLE_SCREEN."""
+    """Verify full state machine lifecycle: TITLE_SCREEN -> INTRO -> GAME -> GAME_OVER -> TITLE_SCREEN."""
     mpu, mem, labels = emu
 
     # Initialize state machine -> enters STATE_TITLE_SCREEN (0)
@@ -212,7 +212,31 @@ def test_state_machine_transitions(emu: tuple[MPU, bytearray, dict[str, int]]) -
     run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
     assert mem[labels["ZP_CURRENT_STATE"]] == labels["STATE_TITLE_SCREEN"]
 
-    # Press FIRE (TRIG0 = 0) -> transitions to STATE_GAME
+    # Press FIRE (TRIG0 = 0) -> transitions to STATE_INTRO
+    mem[TRIG0] = 0x00
+    run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
+    assert mem[labels["ZP_CURRENT_STATE"]] == labels["STATE_INTRO"]
+
+    # Holding FIRE down on the next frame must NOT skip or advance out of STATE_INTRO
+    run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
+    assert mem[labels["ZP_CURRENT_STATE"]] == labels["STATE_INTRO"]
+    assert mem[labels["ZP_INTRO_DONE"]] == 0
+
+    # Release FIRE, press FIRE to skip typewriter -> stays in STATE_INTRO with wait-for-release
+    mem[TRIG0] = 0x01
+    run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
+    mem[TRIG0] = 0x00
+    run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
+    assert mem[labels["ZP_CURRENT_STATE"]] == labels["STATE_INTRO"]
+    assert mem[labels["ZP_INTRO_DONE"]] == 1
+
+    # Holding FIRE while skip completes must NOT advance to STATE_GAME
+    run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
+    assert mem[labels["ZP_CURRENT_STATE"]] == labels["STATE_INTRO"]
+
+    # Release FIRE, then press FIRE -> transitions to STATE_GAME
+    mem[TRIG0] = 0x01
+    run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
     mem[TRIG0] = 0x00
     run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
     assert mem[labels["ZP_CURRENT_STATE"]] == labels["STATE_GAME"]
@@ -235,7 +259,16 @@ def test_state_machine_transitions(emu: tuple[MPU, bytearray, dict[str, int]]) -
     run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
     assert mem[labels["ZP_CURRENT_STATE"]] == labels["STATE_TITLE_SCREEN"]
 
-    # Advance to STATE_GAME again, then press UP + FIRE -> transitions to STATE_GAME_OVER_SUCCESS
+    # Advance through STATE_INTRO to STATE_GAME again, then press UP + FIRE -> STATE_GAME_OVER_SUCCESS
+    mem[TRIG0] = 0x01
+    run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
+    mem[TRIG0] = 0x00
+    run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
+    assert mem[labels["ZP_CURRENT_STATE"]] == labels["STATE_INTRO"]
+    mem[TRIG0] = 0x01
+    run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
+    mem[TRIG0] = 0x00
+    run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
     mem[TRIG0] = 0x01
     run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
     mem[TRIG0] = 0x00
@@ -429,10 +462,10 @@ def test_title_music_playback(emu: tuple[MPU, bytearray, dict[str, int]]) -> Non
     # At least one channel should have non-zero volume/distortion written
     assert any(mem[addr] != 0 for addr in audc_addrs)
 
-    # 3. Simulate FIRE press during title_update -> transitions to STATE_GAME and silences POKEY
+    # 3. Simulate FIRE press during title_update -> transitions to STATE_INTRO and silences POKEY
     mem[labels["ZP_FIRE_PRESSED"]] = 1
     run_subroutine(mpu, labels["TITLE_UPDATE"])
-    assert mem[labels["ZP_NEXT_STATE"]] == labels["STATE_GAME"]
+    assert mem[labels["ZP_NEXT_STATE"]] == labels["STATE_INTRO"]
     assert mem[labels["MUSIC_PLAYING"]] == 0
     # All POKEY audio channels silenced
     assert all(mem[addr] == 0 for addr in audc_addrs)

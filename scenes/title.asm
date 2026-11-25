@@ -264,11 +264,11 @@ TEXT_SPACES_LEN = 5
     ; Advance 5th player sine-wave animation table
     jsr title_update_p5_wave
 
-    ; Transition TITLE_SCREEN -> GAME on FIRE press
+    ; Transition TITLE_SCREEN -> INTRO on FIRE press
     lda zp_fire_pressed
     beq @stay
     jsr music_stop
-    lda #STATE_GAME
+    lda #STATE_INTRO
     sta zp_next_state
 @stay
     rts

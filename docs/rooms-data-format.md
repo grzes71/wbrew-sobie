@@ -366,3 +366,30 @@ Compared to the 5-plane baseline (`5 * N` bytes, storing `rep_w = 1, rep_h = 1` 
     rts
 .endp
 ```
+
+---
+
+## 7. Runtime Initial Room Screen (`STATE_GAME`)
+
+### State Flow & Start Room Selection
+1. `state_machine_init` in [`main.asm`](../main.asm) initializes input and enters `STATE_TITLE_SCREEN`.
+2. Pressing FIRE on the title screen triggers `STATE_TITLE_SCREEN` -> `STATE_GAME` (`game_enter` in [`scenes/game.asm`](../scenes/game.asm)).
+3. `game_enter` disables DLI/DMA and title-screen PMG, selects the compiler-emitted `START_ROOM` equate from `gen/rooms_defs.asm`, calls `room_draw` (`X = START_ROOM`) and `room_setup_display` (`X = START_ROOM`), points `SDLST`/`DLIST` to `room_dlist` and `VDSLST` to `room_dli_handler`, enables playfield DMA (`SDMCTL = $22`), and enables `NMIEN = $C0` iff `room_dli_count > 0` (keeping `NMIEN = $40` for uniform single-style rooms).
+4. `game_update` runs per frame without redrawing `SCREEN_VRAM`: it resets `zp_dli_idx = 0` for the frame's top row and waits for a rising edge on `zp_fire_pressed` (from `engine/input.asm`). When FIRE is newly pressed, it schedules `STATE_GAME_OVER_FAILURE` (or `STATE_GAME_OVER_SUCCESS` if Joy UP is held). Holding FIRE does not trigger repeated transitions.
+
+### Runtime Memory Map & Zero-Page Usage
+
+| Region / Symbol | Address | Size | Purpose |
+| --- | --- | --- | --- |
+| `SCREEN_VRAM` | `$3000..$33BF` | `960 B` | Shared `40×24` ANTIC Mode 4 screen buffer (does not cross 4 KB boundary) |
+| `room_dlist` | `$3480..$349F` | `32 B` | Runtime ANTIC Mode 4 Display List (`3×DL_BLANK8`, `24×DL_MODE_4`, `LMS`, `JVB`; does not cross 1 KB boundary) |
+| `cur_row_style` | `$34A0..$34B7` | `24 B` | Active room per-row style cache (`0..23`) |
+| `room_dli_style` | `$34C0..$34D7` | `24 B` | Ordered target style IDs for DLI transitions |
+| `room_dli_count` | `$34D8` | `1 B` | Scheduled DLI transition count (`0..23`) |
+| `cur_room_id` | `$34D9` | `1 B` | Currently displayed 1-based room ID |
+| Room Data & Charsets | `$6000..$6769` | `1898 B` | `gen/charsets.asm` (`1 KB` aligned via `ROOMS_ALIGN_CHARSETS = 1`), `gen/styles.asm`, `gen/objects.asm`, `gen/rooms.asm`, `gen/teleports.asm` |
+| `zp_room_*` | `$B0..$CB` | `28 B` | Plane pointers, stamp cursor, repeat counters, and scratch bytes in [`zeropage.asm`](../zeropage.asm) (`zp_dli_idx = $82` reused for DLI indexing) |
+
+### Known Limitations
+- Only renders the static initial room (`START_ROOM`); hero sprite/PMG, movement, collisions, room edge scrolling/transitions, enemies, pickups, and teleports are not yet implemented.
+- Each DLI transition writes `CHBASE`, `COLBK`, and `COLPF0..COLPF3` after `STA WSYNC` (preloading `CHBASE` and `COLBK` before `WSYNC`); `COLPF2` and `COLPF3` complete slightly into the start of scanline 0 of the new row (~cycle 32–40), which is glitch-free on scanlines with background border (`COLBK`) or `COLPF0`/`COLPF1` content, and could show a brief mid-scanline tint if `COLPF2`/`COLPF3` pixels appear at column 0 of a transition row.

@@ -50,3 +50,47 @@
     sta CHBASE                  ; 4  (15) Ensure hardware CHBASE starts at charset 0
     jmp XITVBV                  ; 3  (18) Exit OS Deferred VBI
 .endp
+
+; ------------------------------------------------------------------------------
+; room_dli_handler — Switches CHBASE and 5 GTIA playfield/background colors
+; Triggered on scanline 7 of rows preceding a row-style change in room_dlist
+; ------------------------------------------------------------------------------
+.proc room_dli_handler
+    pha                         ; 3  (3)  Save A
+    txa                         ; 2  (5)
+    pha                         ; 3  (8)  Save X
+    tya                         ; 2  (10)
+    pha                         ; 3  (13) Save Y
+
+    ldx zp_dli_idx              ; 3  (16) Current DLI transition index (0..room_dli_count-1)
+    ldy room_dli_style,x        ; 4  (20) Target style ID for next row
+    lda style_chbase,y          ; 4  (24) Preload CHBASE before WSYNC
+    ldx style_colbk,y           ; 4  (28) Preload COLBK before WSYNC
+
+    sta WSYNC                   ; 4  (32) Wait for horizontal blank at end of scanline 7
+    sta CHBASE                  ; 4  (4)  Commit charset base for next row
+    stx COLBK                   ; 4  (8)  Commit background color
+    lda style_colpf0,y          ; 4  (12)
+    sta COLPF0                  ; 4  (16) Commit COLPF0
+    lda style_colpf1,y          ; 4  (20)
+    sta COLPF1                  ; 4  (24) Commit COLPF1
+    lda style_colpf2,y          ; 4  (28)
+    sta COLPF2                  ; 4  (32) Commit COLPF2
+    lda style_colpf3,y          ; 4  (36)
+    sta COLPF3                  ; 4  (40) Commit COLPF3
+
+    ldx zp_dli_idx              ; 3  (43) Advance DLI transition index
+    inx                         ; 2  (45)
+    cpx room_dli_count          ; 4  (49) Reached last DLI transition in frame?
+    bcc @save_idx               ; 2/3(51/52)
+    ldx #0                      ; 2  (53) Wrap index back to 0
+@save_idx
+    stx zp_dli_idx              ; 3  (56) Store updated DLI index
+
+    pla                         ; 4  (60) Restore Y
+    tay                         ; 2  (62)
+    pla                         ; 4  (66) Restore X
+    tax                         ; 2  (68)
+    pla                         ; 4  (72) Restore A
+    rti                         ; 6  (78) Return from interrupt
+.endp

@@ -31,4 +31,37 @@ zp_p5_wave_phase    = $97   ; Bieżąca faza fali sinusowej dla 5. gracza (1 baj
 ; --- Audio Player Zero Page Base ($A0-$A9) ---
 PLAYER_ZP_BASE      = $A0
 
+; --- Room Renderer & Display Pointers ($B0-$CB) ---
+zp_room_inst_obj    = $B0   ; Wskaźnik płaszczyzny obj_id instancji (2 bajty: $B0-$B1)
+zp_room_inst_x      = $B2   ; Wskaźnik płaszczyzny X instancji (2 bajty: $B2-$B3)
+zp_room_inst_yf     = $B4   ; Wskaźnik płaszczyzny y_flag instancji (2 bajty: $B4-$B5)
+zp_room_rep_w       = $B6   ; Wskaźnik płaszczyzny rep_w instancji (2 bajty: $B6-$B7)
+zp_room_rep_h       = $B8   ; Wskaźnik płaszczyzny rep_h instancji (2 bajty: $B8-$B9)
+zp_room_obj_ptr     = $BA   ; Wskaźnik danych komórek obiektu / tymczasowy (2 bajty: $BA-$BB)
+zp_room_scr_ptr     = $BC   ; Wskaźnik docelowy wiersza ekranu SCREEN_VRAM (2 bajty: $BC-$BD)
+zp_room_inst_cnt    = $BE   ; Liczba instancji w komnacie N (1 bajt)
+zp_room_inst_idx    = $BF   ; Bieżący indeks instancji 0..N-1 (1 bajt)
+zp_room_rep_idx     = $C0   ; Bieżący indeks powtórzeń 0..R-1 (1 bajt)
+zp_room_obj_id      = $C1   ; Bieżące ID obiektu 1..OBJ_MAX_ID (1 bajt)
+zp_room_obj_w       = $C2   ; Szerokość bieżącego obiektu w komórkach (1 bajt)
+zp_room_obj_h       = $C3   ; Wysokość bieżącego obiektu w komórkach (1 bajt)
+zp_room_base_x      = $C4   ; Bazowa współrzędna X instancji (1 bajt)
+zp_room_cur_x       = $C5   ; Bieżąca współrzędna X kopii stempla (1 bajt)
+zp_room_cur_y       = $C6   ; Bieżąca współrzędna Y kopii stempla (1 bajt)
+zp_room_rep_w_cnt   = $C7   ; Licznik pozostałych powtórzeń w poziomie (1 bajt)
+zp_room_rep_w_tot   = $C8   ; Całkowita liczba powtórzeń w poziomie rep_w (1 bajt)
+zp_room_rep_h_cnt   = $C9   ; Licznik pozostałych powtórzeń w pionie (1 bajt)
+zp_room_row_cnt     = $CA   ; Licznik pozostałych wierszy kopiowanego stempla (1 bajt)
+zp_room_draw_y      = $CB   ; Bieżący wiersz ekranu Y podczas rysowania stempla (1 bajt)
+
+; --- Intro Screen Typewriter State ($D0-$D9) ---
+zp_intro_src        = $D0   ; Wskaźnik źródłowy wiersza intro_screen_data (2 bajty: $D0-$D1)
+zp_intro_dst        = $D2   ; Wskaźnik docelowy wiersza w SCREEN_VRAM (2 bajty: $D2-$D3)
+zp_intro_row        = $D4   ; Bieżący wiersz efektu maszyny do pisania (0..INTRO_LINES)
+zp_intro_col        = $D5   ; Bieżąca kolumna efektu maszyny do pisania (0..INTRO_COLS-1)
+zp_intro_timer      = $D6   ; Licznik klatek opóźnienia kolejnego znaku
+zp_intro_sfx_timer  = $D7   ; Licznik czasu zanikania kliku POKEY (0..2 klatki)
+zp_intro_done       = $D8   ; Flaga zakończenia pisania tekstu (0=pisze, 1=cały tekst)
+zp_intro_wait_rel   = $D9   ; Flaga oczekiwania na puszczenie FIRE po pominięciu intro (0/1)
+
 

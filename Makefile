@@ -36,9 +36,13 @@ ROOMS_ASM_FILES     := $(GEN_DIR)/rooms_defs.asm \
                        $(GEN_DIR)/rooms.asm \
                        $(GEN_DIR)/teleports.asm
 
+INTRO_TXT           := texts/intro.txt
+INTRO_COMPILER      := scripts/compile_intro.py
+INTRO_DATA_ASM      := $(GEN_DIR)/intro_text.asm
+
 ASM_SRCS        := main.asm hardware.asm colors.asm zeropage.asm \
-                   lib/rle.asm lib/pmg.asm lib/player.asm engine/input.asm engine/dli.asm \
-                   scenes/title.asm scenes/game.asm scenes/gameover.asm
+                   lib/rle.asm lib/pmg.asm lib/player.asm engine/input.asm engine/dli.asm engine/room.asm \
+                   scenes/title.asm scenes/intro.asm scenes/game.asm scenes/gameover.asm
 
 .PHONY: all assets data audio xex tests test check_memory run clean
 
@@ -56,7 +60,7 @@ $(TITLE_JSON): $(TITLE_PNG) $(GAME_FONT) scripts/png_to_charset.py
 # ------------------------------------------------------------------------------
 # 2. Data compilation (JSON -> RLE ASM; YAML + PNGs -> Room & Charset ASM)
 # ------------------------------------------------------------------------------
-data: $(TITLE_DATA_ASM) $(ROOMS_ASM_FILES)
+data: $(TITLE_DATA_ASM) $(ROOMS_ASM_FILES) $(INTRO_DATA_ASM)
 
 $(TITLE_DATA_ASM): $(TITLE_JSON) scripts/compile_title_screen.py
 	@$(MKDIR) $(GEN_DIR)
@@ -65,6 +69,10 @@ $(TITLE_DATA_ASM): $(TITLE_JSON) scripts/compile_title_screen.py
 $(ROOMS_ASM_FILES) &: $(ROOMS_YAML) $(ROOMS_PNGS) $(ROOMS_COMPILER)
 	@$(MKDIR) $(GEN_DIR)
 	$(PYTHON) $(ROOMS_COMPILER) $(ROOMS_YAML) --out $(GEN_DIR)
+
+$(INTRO_DATA_ASM): $(INTRO_TXT) $(INTRO_COMPILER)
+	@$(MKDIR) $(GEN_DIR)
+	$(PYTHON) $(INTRO_COMPILER) --input $(INTRO_TXT) --output $(INTRO_DATA_ASM)
 
 # ------------------------------------------------------------------------------
 # 3. Audio compilation (Music DSL + arrangement JSON -> JSON IR -> MADS v2 SoA ASM)
@@ -80,7 +88,7 @@ $(TITLE_MUSIC_JSON) $(TITLE_MUSIC_ASM): $(TITLE_DSL) $(TITLE_ARRANGEMENT) script
 # ------------------------------------------------------------------------------
 xex: $(TARGET)
 
-$(TARGET): $(ASM_SRCS) $(TITLE_DATA_ASM) $(TITLE_MUSIC_ASM) $(ROOMS_ASM_FILES)
+$(TARGET): $(ASM_SRCS) $(TITLE_DATA_ASM) $(TITLE_MUSIC_ASM) $(ROOMS_ASM_FILES) $(INTRO_DATA_ASM)
 	@$(MKDIR) $(GEN_DIR)
 	$(MADS) main.asm -o:$(TARGET) -l:$(GEN_DIR)/main.lst -t:$(GEN_DIR)/main.lab
 

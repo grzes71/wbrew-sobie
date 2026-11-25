@@ -2,6 +2,24 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-25] - Center `STATE_INTRO` Lines and Set `$C0`/`$CE` Colors
+- Updated [scripts/compile_intro.py](scripts/compile_intro.py) to center each non-blank line inside 40 columns and emit 10-byte `intro_line_start` and `intro_line_end` tables alongside `intro_screen_data` in [gen/intro_text.asm](gen/intro_text.asm).
+- Updated [scenes/intro.asm](scenes/intro.asm) to start and wrap typewriter reveals using `intro_line_start` / `intro_line_end` without typing delays on leading spaces.
+- Updated intro palette constants in [colors.asm](colors.asm) to `INTRO_COLBK = $C0`, `INTRO_COLPF2 = $C0`, and `INTRO_COLPF1 = $CE`, and expanded [tests/test_intro_screen.py](tests/test_intro_screen.py) to verify centering and colors.
+
+## [2026-11-25] - Add `STATE_INTRO` Typewriter Scene Between Title Screen and Game
+- Added [scripts/compile_intro.py](scripts/compile_intro.py) to validate [texts/intro.txt](texts/intro.txt) (`1..10` lines, `<= 40` characters per line) and compile uppercase text with `title_charset_2` glyph mapping (offset `46` = SPACE, Polish uppercase `Ą..Ż` mapped to `111..119`, em/en dash to `-`) into deterministic [gen/intro_text.asm](gen/intro_text.asm) (`intro_line_len`, `intro_screen_data`), integrated into `data` and `funky_koval.xex` in [Makefile](Makefile).
+- Added [scenes/intro.asm](scenes/intro.asm) implementing `STATE_INTRO` in ANTIC Mode 2 (`intro_dlist` with `10` rows separated by `$70` blank scanlines, reusing `400` bytes of `SCREEN_VRAM = $3000` and `title_charset_2`), frame-paced typewriter reveal, subtle POKEY `AUDC1` key-click SFX (silent on spaces and blank lines), immediate FIRE skip (showing all text silently and waiting for trigger release), and subsequent FIRE transition to `STATE_GAME`.
+- Added intro palette constants (`INTRO_COLBK`, `INTRO_COLPF2`, `INTRO_COLPF1`) in [colors.asm](colors.asm), zero-page state variables (`$D0..$D9`) in [zeropage.asm](zeropage.asm), and wired `STATE_INTRO` into [main.asm](main.asm) and [scenes/title.asm](scenes/title.asm).
+- Added [tests/test_intro_screen.py](tests/test_intro_screen.py) and updated state transition tests in [tests/test_engine.py](tests/test_engine.py), [tests/test_room_screen.py](tests/test_room_screen.py), and [README.md](README.md).
+
+## [2026-11-25] - Implement Initial Room Screen in `funky_koval.xex`
+- Added reusable ANTIC Mode 4 room renderer and display setup module [engine/room.asm](engine/room.asm) (`clear_screen_vram`, `room_draw`, `room_setup_display`, 24-entry `screen_row_lo`/`screen_row_hi` lookup tables, and assembly-time 1 KB/4 KB boundary assertions).
+- Added room zero-page allocations `$B0..$CB` (`zp_room_*`) in [zeropage.asm](zeropage.asm) and `room_dli_handler` in [engine/dli.asm](engine/dli.asm) to switch `CHBASE`, `COLBK`, and `COLPF0..COLPF3` cleanly across `WSYNC` when adjacent rows differ in style.
+- Integrated `gen/rooms_defs.asm`, `ROOMS_ALIGN_CHARSETS = 1` (`$6000+` segment for `gen/charsets.asm`, `gen/styles.asm`, `gen/objects.asm`, `gen/rooms.asm`, `gen/teleports.asm`), and runtime buffers (`room_dlist = $3480`, `cur_row_style = $34A0`, `room_dli_style = $34C0`, `room_dli_count = $34D8`, `cur_room_id = $34D9`) into [main.asm](main.asm) and [Makefile](Makefile).
+- Updated `STATE_GAME` in [scenes/game.asm](scenes/game.asm) to silence title-screen PMG, render `START_ROOM` once on entry, enable DLI only when `room_dli_count > 0`, and transition cleanly on edge-detected FIRE (`zp_fire_pressed`).
+- Added standalone development PNG renderer [tools/render_room_png.py](tools/render_room_png.py), headless `py65` + PNG verification suite [tests/test_room_screen.py](tests/test_room_screen.py), and documentation in [docs/rooms-data-format.md](docs/rooms-data-format.md) and [README.md](README.md).
+
 ## [2026-11-25] - Add `pickable` Object Property to Room Editor & Compiler
 - Added `pickable: bool = False` to `GameObject` in [room_editor/model/project.py](room_editor/model/project.py) and `UpdateObjectCommand` in [room_editor/model/commands.py](room_editor/model/commands.py).
 - Serialized/deserialized `pickable` (defaulting missing YAML entries to `False`) in [room_editor/io/yaml_io.py](room_editor/io/yaml_io.py).

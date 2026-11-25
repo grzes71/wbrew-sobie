@@ -75,15 +75,15 @@ Uruchomienie edytora komnat:
 
 | Ścieżka | Opis |
 | --- | --- |
-| [`main.asm`](main.asm) | Punkt wejścia aplikacji, pętla główna (frame scheduler) oraz maszyna stanów (`TITLE_SCREEN`, `GAME`, `GAME_OVER_*`) |
+| [`main.asm`](main.asm) | Punkt wejścia aplikacji, pętla główna (frame scheduler) oraz maszyna stanów (`TITLE_SCREEN`, `INTRO`, `GAME`, `GAME_OVER_*`) |
 | [`hardware.asm`](hardware.asm) | Definicje rejestrów sprzętowych ANTIC, GTIA, POKEY, PIA |
 | [`colors.asm`](colors.asm) | Globalna paleta kolorów oraz konfiguracja elementów PMG ekranu tytułowego |
 | [`zeropage.asm`](zeropage.asm) | Alokacje zmiennych na stronie zerowej (`$80`–`$FF`) |
-| [`engine/`](engine/) | Moduły silnika: obsługa przerwań DLI ([`dli.asm`](engine/dli.asm) — przełączanie `CHBASE` i pozycji `HPOSM0..HPOSM3` co wiersz), odczyt joysticka ([`input.asm`](engine/input.asm)) |
+| [`engine/`](engine/) | Moduły silnika: obsługa przerwań DLI ([`dli.asm`](engine/dli.asm) — przełączanie `CHBASE`, `HPOSM0..HPOSM3` oraz stylów komnaty), odczyt joysticka ([`input.asm`](engine/input.asm)), renderer komnat ANTIC 4 ([`room.asm`](engine/room.asm)) |
 | [`lib/`](lib/) | Biblioteki pomocnicze 6502: obsługa PMG ([`pmg.asm`](lib/pmg.asm)), dekompresja RLE ([`rle.asm`](lib/rle.asm)), relokowalny 4-kanałowy odtwarzacz muzyki POKEY v2 ([`player.asm`](lib/player.asm)) |
-| [`scenes/`](scenes/) | Sceny gry: ekran tytułowy ([`title.asm`](scenes/title.asm) — grafika ANTIC 4, napisy PMG, animacja falowa 5. gracza i muzyka tytułowa), gra ([`game.asm`](scenes/game.asm)), ekran końcowy ([`gameover.asm`](scenes/gameover.asm)) |
+| [`scenes/`](scenes/) | Sceny gry: ekran tytułowy ([`title.asm`](scenes/title.asm) — grafika ANTIC 4, napisy PMG, animacja falowa 5. gracza i muzyka tytułowa), intro ([`intro.asm`](scenes/intro.asm) — tryb ANTIC 2 z efektem maszyny do pisania i polskimi znakami), gra ([`game.asm`](scenes/game.asm)), ekran końcowy ([`gameover.asm`](scenes/gameover.asm)) |
 | [`music/`](music/) | Źródłowe kompozycje muzyczne w formacie Music DSL ([`title.dsl`](music/title.dsl)) oraz manifesty aranżacji ([`title.arrangement.json`](music/title.arrangement.json)) |
-| [`scripts/`](scripts/) | Narzędzia Python do konwersji grafiki, kompilacji danych (`rooms_compile.py`, `compile_title_screen.py`, `compile_music.py`) i walidacji mapy pamięci |
+| [`scripts/`](scripts/) | Narzędzia Python do konwersji grafiki, kompilacji danych (`rooms_compile.py`, `compile_title_screen.py`, `compile_music.py`) i walidacji mapy pamięci (oraz [`tools/render_room_png.py`](tools/render_room_png.py) do renderowania podglądu PNG komnat) |
 | [`docs/`](docs/) | Dokumentacja techniczna formatów danych ([`rooms-data-format.md`](docs/rooms-data-format.md)) |
 | [`sprite_studio/`](sprite_studio/) | Edytor GUI (PySide6) sprajtów i klatek animacji |
 | [`room_editor/`](room_editor/) | Edytor GUI (PySide6) komnat ANTIC 4, grup obiektów i teleportów |

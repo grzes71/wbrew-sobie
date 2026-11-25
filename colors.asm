@@ -52,4 +52,9 @@ TITLE_P5_SIZEM          = $00       ; Szerokość x1 dla wszystkich 4 pocisków 
 TITLE_P5_WAVE_SPEED     = 1         ; Prędkość przesuwania fali na klatkę
 TITLE_P5_WAVE_STEP      = 3         ; Przesunięcie fazy w tablicy sinusów pomiędzy kolejnymi wierszami
 
+; --- Intro Screen (STATE_INTRO, ANTIC Mode 2) Colors ---
+INTRO_COLBK             = $C0       ; Kolor tła / ramki (COLBK / COLOR4)
+INTRO_COLPF2            = $C0       ; Kolor tła znaków w trybie ANTIC 2 (COLPF2 / COLOR2)
+INTRO_COLPF1            = $CE       ; Jasny kolor tekstu w trybie ANTIC 2 (COLPF1 / COLOR1)
+
 
