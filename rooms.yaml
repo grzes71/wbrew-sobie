@@ -137,26 +137,26 @@ object_groups:
   - {code: 124, data: "0008080808080808", src: [18, 8]}
   - {code: 125, data: "080800082A2A2A00", src: [18, 9]}
 objects:
-- {id: 1, name: column1, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 0, y: 0, w: 4, h: 6}}
-- {id: 2, name: arch, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 4, y: 0, w: 5, h: 6}}
-- {id: 3, name: ceil, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 9, y: 0, w: 6, h: 4}}
-- {id: 4, name: bricks, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 0, y: 6, w: 4, h: 2}}
-- {id: 5, name: banner1, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 2, y: 8, w: 3, h: 5}}
-- {id: 6, name: banner2, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 5, y: 8, w: 3, h: 5}}
-- {id: 7, name: ladder, group: castle, tags: [ladder], non-blockable: true, colpf3: false, region: {x: 8, y: 8, w: 3, h: 1}}
-- {id: 8, name: chest, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 8, y: 11, w: 3, h: 2}}
-- {id: 9, name: alchemy, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 11, y: 9, w: 4, h: 4}}
-- {id: 10, name: torch, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 0, y: 8, w: 2, h: 3}}
-- {id: 11, name: chest_nb, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 8, y: 11, w: 3, h: 2}}
-- {id: 12, name: monk_statue, group: castle, tags: [], non-blockable: false, colpf3: false, region: {x: 13, y: 5, w: 3, h: 4}}
-- {id: 13, name: bottles1, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 12, y: 9, w: 3, h: 2}}
-- {id: 14, name: bottles2, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 12, y: 11, w: 3, h: 2}}
-- {id: 15, name: door_closed, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 9, y: 4, w: 4, h: 4}}
-- {id: 16, name: door_open, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 16, y: 1, w: 4, h: 4}}
-- {id: 17, name: candle, group: castle, tags: [], non-blockable: true, colpf3: true, region: {x: 17, y: 5, w: 3, h: 5}}
-- {id: 18, name: brick_small, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 1, y: 6, w: 1, h: 2}}
-- {id: 19, name: brick_small_2, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 1, y: 6, w: 2, h: 1}}
-- {id: 20, name: brick_wall, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 8, y: 9, w: 3, h: 2}}
+- {id: 1, name: column1, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 0, y: 0, w: 4, h: 6}}
+- {id: 2, name: arch, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 4, y: 0, w: 5, h: 6}}
+- {id: 3, name: ceil, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 9, y: 0, w: 6, h: 4}}
+- {id: 4, name: bricks, group: castle, tags: [], non-blockable: false, pickable: false, colpf3: true, region: {x: 0, y: 6, w: 4, h: 2}}
+- {id: 5, name: banner1, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 2, y: 8, w: 3, h: 5}}
+- {id: 6, name: banner2, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 5, y: 8, w: 3, h: 5}}
+- {id: 7, name: ladder, group: castle, tags: [ladder], non-blockable: true, pickable: false, colpf3: false, region: {x: 8, y: 8, w: 3, h: 1}}
+- {id: 8, name: chest, group: castle, tags: [], non-blockable: false, pickable: true, colpf3: true, region: {x: 8, y: 11, w: 3, h: 2}}
+- {id: 9, name: alchemy, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 11, y: 9, w: 4, h: 4}}
+- {id: 10, name: torch, group: castle, tags: [], non-blockable: false, pickable: false, colpf3: true, region: {x: 0, y: 8, w: 2, h: 3}}
+- {id: 11, name: chest_nb, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 8, y: 11, w: 3, h: 2}}
+- {id: 12, name: monk_statue, group: castle, tags: [], non-blockable: false, pickable: false, colpf3: false, region: {x: 13, y: 5, w: 3, h: 4}}
+- {id: 13, name: bottles1, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 12, y: 9, w: 3, h: 2}}
+- {id: 14, name: bottles2, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 12, y: 11, w: 3, h: 2}}
+- {id: 15, name: door_closed, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 9, y: 4, w: 4, h: 4}}
+- {id: 16, name: door_open, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, region: {x: 16, y: 1, w: 4, h: 4}}
+- {id: 17, name: candle, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: true, region: {x: 17, y: 5, w: 3, h: 5}}
+- {id: 18, name: brick_small, group: castle, tags: [], non-blockable: false, pickable: false, colpf3: true, region: {x: 1, y: 6, w: 1, h: 2}}
+- {id: 19, name: brick_small_2, group: castle, tags: [], non-blockable: false, pickable: false, colpf3: true, region: {x: 1, y: 6, w: 2, h: 1}}
+- {id: 20, name: brick_wall, group: castle, tags: [], non-blockable: false, pickable: false, colpf3: true, region: {x: 8, y: 9, w: 3, h: 2}}
 rooms:
 - id: 1
   name: K1
@@ -230,7 +230,7 @@ rooms:
 - id: 3
   name: K3
   pos: [1, 0]
-  row_groups: [{group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}]
+  row_groups: [{group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}, castle, castle, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}]
   placed:
   - {object: 20, x: 37, y: 0, repeat-y: 12}
   - {object: 10, x: 32, y: 1}

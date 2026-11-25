@@ -428,6 +428,7 @@ def test_all_in_one_fixture_player_crosscheck_and_features(tmp_path: Path) -> No
                 "group": "Zamek Główny",
                 "tags": ["Złoto"],
                 "non-blockable": True,
+                "pickable": True,
                 "colpf3": True,
                 "region": {"x": 2, "y": 0, "w": 1, "h": 1},
             },
@@ -553,6 +554,9 @@ def test_all_in_one_fixture_player_crosscheck_and_features(tmp_path: Path) -> No
     assert asm_img.read_id_byte("obj_tags0", 5) == 0x03
     assert asm_img.read_id_byte("obj_tags0", 3) == 0x00
     assert asm_img.read_id_byte("obj_w", 3) == 0x00
+    assert asm_img.equates["OBJ_FLAG_PICKABLE"] == 0x04
+    assert asm_img.read_id_byte("obj_flags", 4) == 0x07  # NB | COLPF3 | PICKABLE
+    assert asm_img.read_id_byte("obj_flags", 2) == 0x00
 
     # Neighbours & gaps
     assert asm_img.read_id_byte("room_right", 1) == 3

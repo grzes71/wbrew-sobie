@@ -242,6 +242,7 @@ class ObjectsView(QWidget):
             reg_row.addWidget(sp)
 
         self._chk_non_blockable = QCheckBox("Non-blockable (hero can pass)")
+        self._chk_pickable = QCheckBox("Pickable")
         self._chk_colpf3 = QCheckBox("COLPF3 (codes +128: 129..255)")
         btn_apply_obj = QPushButton("Apply Object Properties")
         btn_apply_obj.clicked.connect(self._on_apply_object_props)
@@ -251,6 +252,7 @@ class ObjectsView(QWidget):
         obj_form.addRow("Group:", self._combo_obj_group)
         obj_form.addRow("Region (glyphs):", reg_row)
         obj_form.addRow(self._chk_non_blockable)
+        obj_form.addRow(self._chk_pickable)
         obj_form.addRow(self._chk_colpf3)
         obj_form.addRow(btn_apply_obj)
         obj_layout.addLayout(obj_form)
@@ -318,6 +320,8 @@ class ObjectsView(QWidget):
             tags = []
             if obj.non_blockable:
                 tags.append("NB")
+            if obj.pickable:
+                tags.append("PICK")
             if obj.colpf3:
                 tags.append("COLPF3")
             if err:
@@ -454,6 +458,7 @@ class ObjectsView(QWidget):
         self._spin_reg_w.setEnabled(enabled)
         self._spin_reg_h.setEnabled(enabled)
         self._chk_non_blockable.setEnabled(enabled)
+        self._chk_pickable.setEnabled(enabled)
         self._chk_colpf3.setEnabled(enabled)
         self._btn_del_obj.setEnabled(enabled)
         for cb in self._tag_checkboxes.values():
@@ -470,6 +475,7 @@ class ObjectsView(QWidget):
             self._spin_reg_w.setValue(obj.region.w)
             self._spin_reg_h.setValue(obj.region.h)
             self._chk_non_blockable.setChecked(obj.non_blockable)
+            self._chk_pickable.setChecked(obj.pickable)
             self._chk_colpf3.setChecked(obj.colpf3)
             for tag, cb in self._tag_checkboxes.items():
                 cb.setChecked(tag in obj.tags)
@@ -484,6 +490,7 @@ class ObjectsView(QWidget):
         else:
             self._edit_obj_name.clear()
             self._chk_non_blockable.setChecked(False)
+            self._chk_pickable.setChecked(False)
             self._chk_colpf3.setChecked(False)
             grp = (
                 self._project.get_group(self._selected_group_name)
@@ -1087,6 +1094,7 @@ class ObjectsView(QWidget):
             h=self._spin_reg_h.value(),
         )
         new_nb = self._chk_non_blockable.isChecked()
+        new_pickable = self._chk_pickable.isChecked()
         new_colpf3 = self._chk_colpf3.isChecked()
 
         if not new_name:
@@ -1153,6 +1161,7 @@ class ObjectsView(QWidget):
                 group=new_group,
                 tags=tags,
                 non_blockable=new_nb,
+                pickable=new_pickable,
                 colpf3=new_colpf3,
                 region=new_region,
             )

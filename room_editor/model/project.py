@@ -127,6 +127,7 @@ class GameObject:
     group: str
     tags: list[str] = field(default_factory=list)
     non_blockable: bool = False
+    pickable: bool = False
     colpf3: bool = False
     region: StampRegion = field(default_factory=lambda: StampRegion(0, 0, 1, 1))
     chars: list[list[int]] = field(default_factory=list, repr=False, compare=False)
@@ -134,6 +135,7 @@ class GameObject:
     def __post_init__(self) -> None:
         self.id = int(self.id)
         self.non_blockable = bool(self.non_blockable)
+        self.pickable = bool(self.pickable)
         self.colpf3 = bool(self.colpf3)
         if not isinstance(self.region, StampRegion):
             self.region = StampRegion.from_dict(self.region)

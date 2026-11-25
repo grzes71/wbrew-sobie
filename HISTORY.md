@@ -2,6 +2,12 @@
 
 <!-- AGENT INSTRUCTIONS: Prepend new history entries directly below this comment. Use format: ## [YYYY-MM-DD] - [Brief Title] and relative file paths only. -->
 
+## [2026-11-25] - Add `pickable` Object Property to Room Editor & Compiler
+- Added `pickable: bool = False` to `GameObject` in [room_editor/model/project.py](room_editor/model/project.py) and `UpdateObjectCommand` in [room_editor/model/commands.py](room_editor/model/commands.py).
+- Serialized/deserialized `pickable` (defaulting missing YAML entries to `False`) in [room_editor/io/yaml_io.py](room_editor/io/yaml_io.py).
+- Added the `Pickable` checkbox directly below `Non-blockable (hero can pass)` (plus `[PICK]` list badge) in [room_editor/ui/objects_view.py](room_editor/ui/objects_view.py).
+- Added `OBJ_FLAG_PICKABLE = $04` (bit 2 of `obj_flags`) in [scripts/rooms_compile.py](scripts/rooms_compile.py), updated [docs/rooms-data-format.md](docs/rooms-data-format.md) and [room_editor/SPECIFICATION.md](room_editor/SPECIFICATION.md), and added test coverage in [room_editor/tests/test_compression_and_yaml.py](room_editor/tests/test_compression_and_yaml.py), [room_editor/tests/test_architecture_and_gui.py](room_editor/tests/test_architecture_and_gui.py), and [tests/test_rooms_compile.py](tests/test_rooms_compile.py).
+
 ## [2026-11-25] - Add MADS Room Data Compiler & Makefile Build Integration
 - Added standalone compiler [scripts/rooms_compile.py](scripts/rooms_compile.py) compiling `rooms.yaml` (v4) and group PNGs into six deterministic MADS assembly files in `gen/` (`rooms_defs.asm`, `charsets.asm`, `styles.asm`, `objects.asm`, `rooms.asm`, `teleports.asm`) with 1-based `base - 1` ID indexing, deduplicated cell blocks and row-style tables, z-ordered non-blockable-first compact instance SoA blocks (`3*N + 2*R`), strict/atomic error handling, Polish-safe symbol sanitization, and size reporting.
 - Integrated room compilation into [Makefile](Makefile) (`data` and `funky_koval.xex` depend on [rooms.yaml](rooms.yaml), group PNGs via `--list-deps`, and [scripts/rooms_compile.py](scripts/rooms_compile.py)).

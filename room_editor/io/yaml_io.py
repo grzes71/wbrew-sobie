@@ -158,6 +158,7 @@ def _project_to_yaml_dict(project: Project) -> dict[str, Any]:
                     "group": obj.group,
                     "tags": _FlowList(list(obj.tags)),
                     "non-blockable": bool(obj.non_blockable),
+                    "pickable": bool(obj.pickable),
                     "colpf3": bool(obj.colpf3),
                     "region": _FlowMap(obj.region.to_dict()),
                 }
@@ -436,6 +437,7 @@ def deserialize_project_from_yaml(
                 group=str(obj_raw.get("group", "")),
                 tags=[str(t) for t in (obj_raw.get("tags") or [])],
                 non_blockable=bool(obj_raw.get("non-blockable", False)),
+                pickable=bool(obj_raw.get("pickable", False)),
                 colpf3=bool(obj_raw.get("colpf3", False)),
                 region=region,
             )

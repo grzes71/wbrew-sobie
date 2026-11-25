@@ -795,6 +795,7 @@ class UpdateObjectCommand(Command):
         group: str | None = None,
         tags: list[str] | None = None,
         non_blockable: bool | None = None,
+        pickable: bool | None = None,
         colpf3: bool | None = None,
         region: StampRegion | None = None,
     ) -> None:
@@ -807,6 +808,7 @@ class UpdateObjectCommand(Command):
             obj.group,
             list(obj.tags),
             obj.non_blockable,
+            obj.pickable,
             obj.colpf3,
             obj.region,
         )
@@ -816,21 +818,23 @@ class UpdateObjectCommand(Command):
             obj.group if group is None else group,
             list(obj.tags) if tags is None else list(tags),
             obj.non_blockable if non_blockable is None else bool(non_blockable),
+            obj.pickable if pickable is None else bool(pickable),
             obj.colpf3 if colpf3 is None else bool(colpf3),
             obj.region if region is None else region,
         )
 
     def _apply(
         self,
-        state: tuple[int, str, str, list[str], bool, bool, StampRegion],
+        state: tuple[int, str, str, list[str], bool, bool, bool, StampRegion],
         prev_id: int,
     ) -> None:
-        nid, nname, ngroup, ntags, nnb, ncolpf3, nregion = state
+        nid, nname, ngroup, ntags, nnb, npick, ncolpf3, nregion = state
         self._obj.id = nid
         self._obj.name = nname
         self._obj.group = ngroup
         self._obj.tags = list(ntags)
         self._obj.non_blockable = nnb
+        self._obj.pickable = npick
         self._obj.colpf3 = ncolpf3
         self._obj.region = nregion
         if prev_id != nid:

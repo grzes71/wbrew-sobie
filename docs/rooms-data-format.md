@@ -92,7 +92,7 @@ Because `room_left` points 1 byte before `room_left_base`:
 | `GROUP_COUNT`, `STYLE_COUNT` | equate | Group/charset count and count of unique `(group, palette)` row styles (`<= 256`) |
 | `TAG_COUNT`, `TAG_PLANE_COUNT` | equate | Global tag count and byte planes required (`ceil(TAG_COUNT / 8)`) |
 | `TELEPORT_COUNT` | equate | Bidirectional teleport entry count (`0..255`) |
-| `OBJ_FLAG_NON_BLOCKABLE`, `OBJ_FLAG_COLPF3` | equate | Bit masks `$01` and `$02` for `obj_flags` |
+| `OBJ_FLAG_NON_BLOCKABLE`, `OBJ_FLAG_COLPF3`, `OBJ_FLAG_PICKABLE` | equate | Bit masks `$01`, `$02`, and `$04` for `obj_flags` |
 | `ROOM_FLAG_UNIFORM_STYLE` | equate | Bit mask `$01` for `room_flags` |
 | `INST_Y_REPEAT_MASK`, `INST_Y_COORD_MASK` | equate | Bit masks `$80` and `$1F` for instance `y_flag` byte |
 | `START_ROOM`, `START_X`, `START_Y` | equate | Hero starting room ID and cell `(x, y)` (`0..39`, `0..23`) |
@@ -129,7 +129,7 @@ All `obj_*` tables are 1-based ID-indexed via `base - 1` (`1 <= X <= OBJ_MAX_ID`
 |---|---|---|---|
 | `obj_w` (`obj_w_base - 1`) | `OBJ_MAX_ID B` | `[obj_id]` | Stamp width in cells (`1..40`) |
 | `obj_h` (`obj_h_base - 1`) | `OBJ_MAX_ID B` | `[obj_id]` | Stamp height in cells (`1..24`) |
-| `obj_flags` (`obj_flags_base - 1`) | `OBJ_MAX_ID B` | `[obj_id]` | Bit 0 (`$01`) = `non-blockable`; bit 1 (`$02`) = `colpf3`; bits 2..7 reserved (`0`) |
+| `obj_flags` (`obj_flags_base - 1`) | `OBJ_MAX_ID B` | `[obj_id]` | Bit 0 (`$01`) = `non-blockable`; bit 1 (`$02`) = `colpf3`; bit 2 (`$04`) = `pickable`; bits 3..7 reserved (`0`) |
 | `obj_tags<P>` (`obj_tags<P>_base - 1`) | `OBJ_MAX_ID B` | `[obj_id]` | Tag bitmask plane `P` (`0..TAG_PLANE_COUNT-1`, 8 tags per byte). Omitted if `TAG_COUNT == 0`. |
 | `obj_data_lo`, `obj_data_hi` | `OBJ_MAX_ID B` each | `[obj_id]` | 16-bit pointer to deduplicated row-major `w * h` cell code block |
 | `obj_cells_<K>` | `w * h B` (`<= 255 B`) | `[dy * w + dx]` | Row-major cell codes. `0` = transparent (never drawn). If `colpf3` is enabled, all non-zero cells already include `+$80` (`129..255`). |

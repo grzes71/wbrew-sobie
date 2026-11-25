@@ -151,8 +151,10 @@ def test_gui_smoke_acceptance_workflow(qapp: QApplication, tmp_path: Path) -> No
     ]
     proj.objects = [
         GameObject(id=1, name="brick", group="g1", tags=["wall"], region=StampRegion(0, 0, 1, 1)),
-        GameObject(id=2, name="trim", group="g2", tags=["deco"], non_blockable=True, colpf3=True, region=StampRegion(1, 0, 1, 1)),
+        GameObject(id=2, name="trim", group="g2", tags=["deco"], non_blockable=True, pickable=True, colpf3=True, region=StampRegion(1, 0, 1, 1)),
     ]
+    assert proj.objects[0].pickable is False
+    assert not win.objects_view._chk_pickable.isChecked()
     r1 = Room(
         id=1,
         name="K1",

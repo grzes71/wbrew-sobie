@@ -91,6 +91,7 @@ def _build_full_project(tmp_path: Path) -> Project:
                 group="walls",
                 tags=["ladder"],
                 non_blockable=True,
+                pickable=True,
                 colpf3=True,
                 region=StampRegion(0, 0, 1, 2),
             ),

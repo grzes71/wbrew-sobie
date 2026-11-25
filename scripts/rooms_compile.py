@@ -40,6 +40,7 @@ MAX_TELEPORTS = 255
 
 OBJ_FLAG_NON_BLOCKABLE = 0x01
 OBJ_FLAG_COLPF3 = 0x02
+OBJ_FLAG_PICKABLE = 0x04
 ROOM_FLAG_UNIFORM_STYLE = 0x01
 INST_Y_REPEAT_MASK = 0x80
 INST_Y_COORD_MASK = 0x1F
@@ -131,6 +132,7 @@ class CompiledObject:
     group: str
     tags: list[str]
     non_blockable: bool
+    pickable: bool
     colpf3: bool
     x: int
     y: int
@@ -147,6 +149,8 @@ class CompiledObject:
             val |= OBJ_FLAG_NON_BLOCKABLE
         if self.colpf3:
             val |= OBJ_FLAG_COLPF3
+        if self.pickable:
+            val |= OBJ_FLAG_PICKABLE
         return val
 
 
@@ -656,6 +660,7 @@ def compile_project(
                 otags.append(ts)
 
         nb = bool(o.get("non-blockable", False))
+        pick = bool(o.get("pickable", False))
         pf3 = bool(o.get("colpf3", False))
 
         reg = o.get("region")
@@ -682,6 +687,7 @@ def compile_project(
             group=ogroup,
             tags=otags,
             non_blockable=nb,
+            pickable=pick,
             colpf3=pf3,
             x=rx,
             y=ry,
@@ -1213,6 +1219,7 @@ def compile_project(
             "; --- Bit Flags & Masks ---",
             f"OBJ_FLAG_NON_BLOCKABLE  = ${OBJ_FLAG_NON_BLOCKABLE:02X}",
             f"OBJ_FLAG_COLPF3         = ${OBJ_FLAG_COLPF3:02X}",
+            f"OBJ_FLAG_PICKABLE       = ${OBJ_FLAG_PICKABLE:02X}",
             f"ROOM_FLAG_UNIFORM_STYLE = ${ROOM_FLAG_UNIFORM_STYLE:02X}",
             f"INST_Y_REPEAT_MASK      = ${INST_Y_REPEAT_MASK:02X}",
             f"INST_Y_COORD_MASK       = ${INST_Y_COORD_MASK:02X}",
@@ -1360,7 +1367,7 @@ def compile_project(
         obj_lines,
         "obj_flags",
         obj_flags_arr,
-        "Object flags (bit 0 = non-blockable, bit 1 = colpf3)",
+        "Object flags (bit 0 = non-blockable, bit 1 = colpf3, bit 2 = pickable)",
     )
     for p_idx, plane_vals in enumerate(obj_tag_planes):
         obj_bytes += _emit_id_table(
