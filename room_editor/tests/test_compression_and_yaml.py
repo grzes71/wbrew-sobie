@@ -1,4 +1,4 @@
-"""T-5, T-6, T-8, T-9: compression, round-trip YAML, versioning, relative .fnt paths, row groups."""
+"""T-5, T-6, T-8, T-9: compression, YAML v4 round-trip, versioning, relative PNG paths, row groups."""
 
 from __future__ import annotations
 
@@ -6,8 +6,12 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
+from PIL import Image
 
+from room_editor.io.png import load_png
 from room_editor.io.yaml_io import (
+    ProjectIOError,
     UnsupportedVersionError,
     deserialize_project_from_yaml,
     load_project,
@@ -20,7 +24,8 @@ from room_editor.model.compression import (
     compress_room_instances,
     decompress_placements,
 )
-from room_editor.model.palette import Palette
+from room_editor.model.glyphs import StampRegion
+from room_editor.model.palette import NamedPalette, Palette
 from room_editor.model.project import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
@@ -29,6 +34,7 @@ from room_editor.model.project import (
     ObjectInstance,
     Project,
     Room,
+    RowAssignment,
     Settings,
     StartPosition,
     Teleport,
@@ -36,46 +42,97 @@ from room_editor.model.project import (
 )
 
 
-def _sample_fnt(seed: int = 1) -> bytes:
-    return bytes(((i + seed) & 0xFF) for i in range(1024))
+def _create_test_png(path: Path, seed: int = 1) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    w, h = 16, 16  # 4x2 glyphs
+    img = Image.new("P", (w, h))
+    img.putpalette([0, 0, 0, 200, 100, 50, 50, 200, 100, 50, 100, 200] + [0] * (768 - 12))
+    pixels = []
+    for y in range(h):
+        for x in range(w):
+            gx = x // 4
+            gy = y // 8
+            val = ((gx + gy * 4 + seed) % 3) + 1
+            pixels.append(val if (x + y) % 2 == 0 else 0)
+    img.putdata(pixels)
+    img.save(path, format="PNG")
+    return path
 
 
-def _build_full_project(font_rel_a: str = "fonts/walls.fnt", font_rel_b: str = "fonts/deco.fnt") -> Project:
+def _build_full_project(tmp_path: Path) -> Project:
+    png_a = _create_test_png(tmp_path / "images" / "walls.png", seed=1)
+    png_b = _create_test_png(tmp_path / "images" / "deco.png", seed=2)
+
     proj = Project(
-        settings=Settings(default_palette=Palette(colbk=0, colpf0=40, colpf1=202, colpf2=148, colpf3=15)),
+        settings=Settings(
+            default_palette=Palette(colbk=0, colpf0=40, colpf1=202, colpf2=148, colpf3=15)
+        ),
         tags=["ladder", "teleport", "wall"],
         object_groups=[
             ObjectGroup(
                 name="walls",
-                charset_path=font_rel_a,
-                palette=Palette(colbk=0, colpf0=40, colpf1=202, colpf2=148, colpf3=15),
+                image_path="images/walls.png",
+                pixel_mapping=(0, 1, 2, 3),
+                palettes=[NamedPalette("default", Palette(colbk=0, colpf0=40, colpf1=202, colpf2=148, colpf3=15))],
+                image=load_png(png_a),
             ),
             ObjectGroup(
                 name="deco",
-                charset_path=font_rel_b,
-                palette=Palette(colbk=0, colpf0=50, colpf1=180, colpf2=132, colpf3=14),
+                image_path="images/deco.png",
+                pixel_mapping=(0, 2, 1, 3),
+                palettes=[NamedPalette("default", Palette(colbk=0, colpf0=50, colpf1=180, colpf2=132, colpf3=14))],
+                image=load_png(png_b),
             ),
         ],
         objects=[
-            GameObject(id=1, name="ladder", group="walls", tags=["ladder"], non_blockable=True, w=1, h=3, chars=[[34], [34], [34]]),
-            GameObject(id=2, name="brick", group="walls", tags=["wall"], non_blockable=False, w=1, h=1, chars=[[12]]),
-            GameObject(id=3, name="floor", group="walls", tags=["wall"], non_blockable=False, w=1, h=1, chars=[[15]]),
-            GameObject(id=4, name="pillar", group="deco", tags=[], non_blockable=False, w=2, h=2, chars=[[10, 11], [12, 13]]),
+            GameObject(
+                id=1,
+                name="ladder",
+                group="walls",
+                tags=["ladder"],
+                non_blockable=True,
+                colpf3=True,
+                region=StampRegion(0, 0, 1, 2),
+            ),
+            GameObject(
+                id=2,
+                name="brick",
+                group="walls",
+                tags=["wall"],
+                non_blockable=False,
+                region=StampRegion(1, 0, 1, 1),
+            ),
+            GameObject(
+                id=3,
+                name="floor",
+                group="walls",
+                tags=["wall"],
+                non_blockable=False,
+                region=StampRegion(2, 0, 1, 1),
+            ),
+            GameObject(
+                id=4,
+                name="pillar",
+                group="deco",
+                tags=[],
+                non_blockable=False,
+                region=StampRegion(0, 0, 2, 2),
+            ),
         ],
         rooms=[
             Room(
                 id=1,
                 name="K1",
                 pos=(0, 0),
-                row_groups=["walls"] * 10 + ["deco"] * 10,
+                row_groups=["walls"] * 12 + ["deco"] * 12,
                 instances=[
-                    *[ObjectInstance(2, x, 0) for x in range(ROOM_WIDTH)],  # repeat-x: 40
-                    *[ObjectInstance(3, x, y) for y in (18, 19) for x in range(ROOM_WIDTH)],  # repeat-xy: [40, 2]
-                    ObjectInstance(1, 20, 10),  # single 1x3
+                    *[ObjectInstance(2, x, 0) for x in range(ROOM_WIDTH)],
+                    *[ObjectInstance(3, x, y) for y in (22, 23) for x in range(ROOM_WIDTH)],
+                    ObjectInstance(1, 20, 10),
                     ObjectInstance(4, 2, 12),
                     ObjectInstance(4, 4, 12),
                     ObjectInstance(4, 2, 14),
-                    ObjectInstance(4, 4, 14),  # 2x2 object tiled 2x2 -> repeat-xy: [2, 2]
+                    ObjectInstance(4, 4, 14),
                 ],
             ),
             Room(
@@ -83,7 +140,7 @@ def _build_full_project(font_rel_a: str = "fonts/walls.fnt", font_rel_b: str = "
                 name="K2",
                 pos=(1, 0),
                 row_groups=["walls"] * ROOM_HEIGHT,
-                instances=[ObjectInstance(2, 0, y) for y in range(5)],  # repeat-y: 5
+                instances=[ObjectInstance(2, 0, y) for y in range(ROOM_HEIGHT)],
             ),
         ],
         teleports=[
@@ -98,25 +155,38 @@ def _build_full_project(font_rel_a: str = "fonts/walls.fnt", font_rel_b: str = "
 
 
 def test_t5_compression_patterns_determinism_and_edge_cases() -> None:
-    obj_1x1 = GameObject(id=1, name="dot", group="g", w=1, h=1, chars=[[1]])
-    obj_2x3 = GameObject(id=2, name="block", group="g", w=2, h=3, chars=[[1, 2], [3, 4], [5, 6]])
+    obj_1x1 = GameObject(id=1, name="dot", group="g", region=StampRegion(0, 0, 1, 1), chars=[[1]])
+    obj_2x3 = GameObject(
+        id=2,
+        name="block",
+        group="g",
+        region=StampRegion(1, 0, 2, 3),
+        chars=[[1, 2], [3, 4], [5, 6]],
+    )
     objs = {1: obj_1x1, 2: obj_2x3}
 
-    # Empty room
     empty_room = Room(id=1, name="Empty")
     assert compress_room_instances(empty_room, objs) == []
 
-    # Full 40x20 room filled with 1x1
     full_room = Room(
         id=2,
         name="Full",
         instances=[ObjectInstance(1, x, y) for y in range(ROOM_HEIGHT) for x in range(ROOM_WIDTH)],
     )
     comp_full = compress_room_instances(full_room, objs)
-    assert comp_full == [CompressedPlacement(object_id=1, x=0, y=0, repeat_x=40, repeat_y=20)]
-    assert len(decompress_placements(comp_full, objs)) == 800
+    assert comp_full == [CompressedPlacement(object_id=1, x=0, y=0, repeat_x=40, repeat_y=24)]
+    assert len(decompress_placements(comp_full, objs)) == 40 * 24
 
-    # Checkerboard (no adjacent pairs) -> every instance stays single
+    # Vertical run of full room height (24)
+    vert_room = Room(
+        id=5,
+        name="Vert24",
+        instances=[ObjectInstance(1, 0, y) for y in range(ROOM_HEIGHT)],
+    )
+    assert compress_room_instances(vert_room, objs) == [
+        CompressedPlacement(object_id=1, x=0, y=0, repeat_x=1, repeat_y=24)
+    ]
+
     checker_room = Room(
         id=3,
         name="Checker",
@@ -131,13 +201,10 @@ def test_t5_compression_patterns_determinism_and_edge_cases() -> None:
     assert len(comp_checker) == 18
     assert all(e.repeat_x == 1 and e.repeat_y == 1 for e in comp_checker)
 
-    # Larger object 2x3 tiled in 3x2 grid (step = 2, 3) + horizontal repeat-x
     multi_room = Room(
         id=4,
         name="Multi",
-        instances=[
-            ObjectInstance(2, x * 2, y * 3) for y in range(2) for x in range(3)
-        ]
+        instances=[ObjectInstance(2, x * 2, y * 3) for y in range(2) for x in range(3)]
         + [ObjectInstance(1, x, 10) for x in range(10)],
     )
     comp_multi = compress_room_instances(multi_room, objs)
@@ -148,107 +215,137 @@ def test_t5_compression_patterns_determinism_and_edge_cases() -> None:
         (i.object_id, i.x, i.y) for i in multi_room.instances
     )
 
-    # Determinism regardless of input instance ordering
     reversed_room = Room(id=4, name="Multi", instances=list(reversed(multi_room.instances)))
     assert compress_room_instances(reversed_room, objs) == comp_multi
 
 
-def test_t6_yaml_round_trip_and_keywords(tmp_path: Path) -> None:
-    fonts_dir = tmp_path / "fonts"
-    fonts_dir.mkdir()
-    (fonts_dir / "walls.fnt").write_bytes(_sample_fnt(1))
-    (fonts_dir / "deco.fnt").write_bytes(_sample_fnt(2))
-
-    proj = _build_full_project()
+def test_t6_yaml_v3_round_trip_and_keywords(tmp_path: Path) -> None:
+    proj = _build_full_project(tmp_path)
+    proj.rooms.append(
+        Room(
+            id=3,
+            name="Full40x24",
+            pos=(2, 0),
+            row_groups=["walls"] * ROOM_HEIGHT,
+            instances=[ObjectInstance(2, x, y) for y in range(ROOM_HEIGHT) for x in range(ROOM_WIDTH)],
+        )
+    )
     yaml_path = tmp_path / "world.yaml"
     save_project(proj, yaml_path)
-    first_bytes = yaml_path.read_text(encoding="utf-8")
+    first_text = yaml_path.read_text(encoding="utf-8")
 
-    assert "repeat-x:" in first_bytes
-    assert "repeat-y:" in first_bytes
-    assert "repeat-xy:" in first_bytes
+    assert "version: 4" in first_text
+    assert "repeat-x:" in first_text
+    assert "repeat-y: 24" in first_text
+    assert "repeat-xy: [40, 24]" in first_text
+    assert "glyphs:" in first_text
+    assert "pixel_mapping:" in first_text
 
     loaded = load_project(yaml_path)
-    assert loaded.missing_charsets == []
+    assert loaded.missing_images == []
+    assert loaded.invalid_images == []
+    assert loaded.glyph_table_mismatches == []
     assert loaded.project == proj
+    for grp in proj.object_groups:
+        assert loaded.project.get_group(grp.name).glyph_table == grp.glyph_table
 
     yaml_path_2 = tmp_path / "world_resaved.yaml"
     save_project(loaded.project, yaml_path_2)
-    second_bytes = yaml_path_2.read_text(encoding="utf-8")
-    assert first_bytes == second_bytes
+    second_text = yaml_path_2.read_text(encoding="utf-8")
+    assert first_text == second_text
 
 
-def test_t8_version_rejection_and_relocatable_relative_fnt_paths(tmp_path: Path) -> None:
-    with pytest.raises(UnsupportedVersionError, match="version"):
-        deserialize_project_from_yaml("version: 99\nrooms: []\n")
+def test_t8_version_rejection_relative_png_paths_and_glyph_consistency(tmp_path: Path) -> None:
+    # Version 1, 2, 3, 99, and missing version are all rejected
+    for bad_ver in (1, 2, 3, 99):
+        with pytest.raises(UnsupportedVersionError, match="version"):
+            deserialize_project_from_yaml(f"version: {bad_ver}\nrooms: []\n")
 
     with pytest.raises(UnsupportedVersionError, match="missing"):
         deserialize_project_from_yaml("rooms: []\n")
 
-    # Save project + fonts inside dir_a, then move whole directory to dir_b
+    # Save project + PNGs inside dir_a, then move directory to dir_b
     dir_a = tmp_path / "proj_a"
-    (dir_a / "fonts").mkdir(parents=True)
-    (dir_a / "fonts" / "walls.fnt").write_bytes(_sample_fnt(7))
-    (dir_a / "fonts" / "deco.fnt").write_bytes(_sample_fnt(8))
-
-    proj = _build_full_project()
+    dir_a.mkdir()
+    proj = _build_full_project(dir_a)
     save_project(proj, dir_a / "game.yaml")
 
     dir_b = tmp_path / "moved_location" / "proj_b"
     shutil.move(str(dir_a), str(dir_b))
 
     res = load_project(dir_b / "game.yaml")
-    assert res.missing_charsets == []
-    assert res.project.get_group("walls").charset is not None
-    assert res.project.get_group("deco").charset is not None
-    assert res.project.get_group("walls").charset.raw == _sample_fnt(7)
+    assert res.missing_images == []
+    assert res.invalid_images == []
+    assert res.glyph_table_mismatches == []
+    assert res.project.get_group("walls").image is not None
+    assert res.project.get_group("deco").image is not None
+    assert res.project.get_group("walls").glyph_table.used_count > 0
+
+    # Mutate stored glyphs in YAML -> consistency check flags mismatch and recomputes from PNG
+    raw_doc = yaml.safe_load((dir_b / "game.yaml").read_text(encoding="utf-8"))
+    raw_doc["object_groups"][0]["glyphs"][0]["data"] = "FFFFFFFFFFFFFFFF"
+    mutated_yaml = yaml.safe_dump(raw_doc, sort_keys=False)
+    mismatch_res = deserialize_project_from_yaml(mutated_yaml, base_dir=dir_b)
+    assert len(mismatch_res.glyph_table_mismatches) == 1
+    assert mismatch_res.glyph_table_mismatches[0][0] == "walls"
+    assert (
+        mismatch_res.project.get_group("walls").glyph_table
+        == res.project.get_group("walls").glyph_table
+    )
 
 
-def test_t9_row_groups_default_individual_and_group_deletion() -> None:
-    proj = _build_full_project()
+def test_t9_row_groups_default_individual_and_group_deletion(tmp_path: Path) -> None:
+    proj = _build_full_project(tmp_path)
     r = Room(id=10, name="R10", pos=(3, 3))
-    r.set_all_row_groups("walls")
-    assert r.row_groups == ["walls"] * ROOM_HEIGHT
+    r.set_all_row_groups("walls", "default")
+    assert len(r.row_groups) == 24
+    assert r.row_groups == [RowAssignment("walls", "default")] * ROOM_HEIGHT
 
-    r.set_row_group(5, "deco")
-    assert r.row_groups[5] == "deco"
-    assert r.row_groups[4] == "walls"
+    r.set_row_group(5, "deco", "default")
+    r.set_row_group(23, "deco", "default")
+    assert r.row_groups[5] == RowAssignment("deco", "default")
+    assert r.row_groups[23] == RowAssignment("deco", "default")
+    assert r.row_groups[4] == RowAssignment("walls", "default")
 
-    r.set_row_range_group(12, 14, "deco")
-    assert r.row_groups[12:15] == ["deco", "deco", "deco"]
+    r.set_row_range_group(12, 14, "deco", "default")
+    assert r.row_groups[12:15] == [RowAssignment("deco", "default")] * 3
 
     proj.rooms.append(r)
 
-    # Round-trip preserves single-group compression ([walls]) and 20-element mixed list
     yaml_text = serialize_project_to_yaml(proj)
     assert "row_groups: [walls]" in yaml_text
-    loaded = deserialize_project_from_yaml(yaml_text)
+    loaded = deserialize_project_from_yaml(yaml_text, base_dir=tmp_path)
+    assert len(loaded.project.get_room(10).row_groups) == 24
     assert loaded.project.get_room(10).row_groups == r.row_groups
 
-    # Deleting group "deco" updates room rows & objects cleanly and restores on undo
-    cmd = DeleteGroupCommand(proj, "deco", fallback_group="walls")
+    # Reject row_groups lists of wrong lengths (20 or 25)
+    for bad_len in (20, 25):
+        bad_doc = yaml.safe_load(yaml_text)
+        bad_doc["rooms"][0]["row_groups"] = ["walls"] * bad_len
+        with pytest.raises(ProjectIOError, match="row_groups"):
+            deserialize_project_from_yaml(yaml.safe_dump(bad_doc, sort_keys=False), base_dir=tmp_path)
+
+    cmd = DeleteGroupCommand(proj, "deco", fallback_group="walls", fallback_palette="default")
     cmd.execute()
     assert proj.get_group("deco") is None
-    assert "deco" not in proj.get_room(10).row_groups
+    assert all(rg.group != "deco" for rg in proj.get_room(10).row_groups)
     assert proj.get_object(4).group == "walls"
 
     cmd.undo()
     assert proj.get_group("deco") is not None
-    assert proj.get_room(10).row_groups[5] == "deco"
+    assert proj.get_room(10).row_groups[5] == RowAssignment("deco", "default")
     assert proj.get_object(4).group == "deco"
 
 
 def test_non_blockable_z_order_compression_and_yaml_round_trip(tmp_path: Path) -> None:
-    fonts_dir = tmp_path / "fonts"
-    fonts_dir.mkdir()
-    (fonts_dir / "w.fnt").write_bytes(_sample_fnt(3))
+    png_w = _create_test_png(tmp_path / "images" / "w.png", seed=3)
 
     proj = Project(
-        object_groups=[ObjectGroup(name="w", charset_path="fonts/w.fnt")],
+        object_groups=[ObjectGroup(name="w", image_path="images/w.png", image=load_png(png_w))],
         objects=[
-            GameObject(id=1, name="wall", group="w", non_blockable=False, w=1, h=1, chars=[[1]]),
-            GameObject(id=2, name="bg_a", group="w", non_blockable=True, w=1, h=1, chars=[[20]]),
-            GameObject(id=3, name="bg_b", group="w", non_blockable=True, w=1, h=1, chars=[[30]]),
+            GameObject(id=1, name="wall", group="w", non_blockable=False, region=StampRegion(0, 0, 1, 1)),
+            GameObject(id=2, name="bg_a", group="w", non_blockable=True, region=StampRegion(1, 0, 1, 1)),
+            GameObject(id=3, name="bg_b", group="w", non_blockable=True, region=StampRegion(2, 0, 1, 1)),
         ],
         rooms=[
             Room(
@@ -257,13 +354,12 @@ def test_non_blockable_z_order_compression_and_yaml_round_trip(tmp_path: Path) -
                 pos=(0, 0),
                 row_groups=["w"] * ROOM_HEIGHT,
                 instances=[
-                    # Interleaved z-order for non-blockables + blockable wall
                     ObjectInstance(2, 5, 5),
                     ObjectInstance(2, 6, 5),
-                    ObjectInstance(2, 7, 5),  # consecutive run -> repeat-x: 3
-                    ObjectInstance(3, 6, 5),  # overlaps middle of bg_a run!
-                    ObjectInstance(1, 0, 0),  # blockable (emitted first)
-                    ObjectInstance(2, 6, 5),  # bg_a again AFTER bg_b at (6, 5) -> on top of bg_b!
+                    ObjectInstance(2, 7, 5),
+                    ObjectInstance(3, 6, 5),
+                    ObjectInstance(1, 0, 0),
+                    ObjectInstance(2, 6, 5),
                 ],
             )
         ],
@@ -274,20 +370,19 @@ def test_non_blockable_z_order_compression_and_yaml_round_trip(tmp_path: Path) -
     save_project(proj, yaml_path)
     text_1 = yaml_path.read_text(encoding="utf-8")
 
-    # Blockable entry precedes non-blockable entries; non-blockable repeat-x: 3 is preserved
-    assert text_1.index("object: 1") < text_1.index("object: 2")
-    assert "repeat-x: 3" in text_1
+    # Section 'rooms:' should emit blockable object 1 before non-blockable 2/3
+    rooms_section = text_1[text_1.index("rooms:"):]
+    assert rooms_section.index("object: 1") < rooms_section.index("object: 2")
+    assert "repeat-x: 3" in rooms_section
 
     loaded = load_project(yaml_path)
     assert loaded.project == proj
-    assert loaded.project.compose_room(loaded.project.rooms[0])[5][6] == 20
+    assert loaded.project.compose_room(loaded.project.rooms[0])[5][6] == proj.get_object(2).chars[0][0]
 
-    # Save -> load -> save produces byte-for-byte identical YAML
     yaml_path_2 = tmp_path / "zorder_2.yaml"
     save_project(loaded.project, yaml_path_2)
     assert yaml_path_2.read_text(encoding="utf-8") == text_1
 
-    # Changing z-order of overlapping non-blockables makes projects unequal and YAML differ
     proj_swapped = Project(
         object_groups=list(proj.object_groups),
         objects=list(proj.objects),
@@ -303,7 +398,7 @@ def test_non_blockable_z_order_compression_and_yaml_round_trip(tmp_path: Path) -
                     ObjectInstance(2, 6, 5),
                     ObjectInstance(2, 7, 5),
                     ObjectInstance(2, 6, 5),
-                    ObjectInstance(3, 6, 5),  # now bg_b is on top of bg_a!
+                    ObjectInstance(3, 6, 5),
                 ],
             )
         ],
@@ -312,7 +407,6 @@ def test_non_blockable_z_order_compression_and_yaml_round_trip(tmp_path: Path) -
     assert proj_swapped != proj
     assert serialize_project_to_yaml(proj_swapped) != text_1
 
-    # Regular 2x2 tiling of non-blockable 1x1 instances compresses to repeat-xy: [2, 2]
     tiled_room = Room(
         id=2,
         name="Tiled",

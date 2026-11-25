@@ -1,0 +1,292 @@
+version: 4
+settings:
+  default_palette: {colbk: 0, colpf0: 40, colpf1: 202, colpf2: 148, colpf3: 15}
+tags: [ladder]
+object_groups:
+- name: castle
+  image: tmp/castle.png
+  pixel_mapping: [0, 1, 3, 2]
+  palettes:
+  - {name: default, colbk: 0, colpf0: 118, colpf1: 14, colpf2: 128, colpf3: 50}
+  - {name: green, colbk: 0, colpf0: 200, colpf1: 14, colpf2: 194, colpf3: 50}
+  - {name: brown, colbk: 0, colpf0: 24, colpf1: 14, colpf2: 18, colpf3: 20}
+  glyphs:
+  - {code: 1, data: "99A7A5290A020200", src: [0, 0]}
+  - {code: 2, data: "CACAC2F272705C97", src: [1, 0]}
+  - {code: 3, data: "A45C7272F202AAE9", src: [2, 0]}
+  - {code: 4, data: "A9A797975C7070C0", src: [3, 0]}
+  - {code: 5, data: "9525271F0A29251F", src: [1, 1]}
+  - {code: 6, data: "57D7FC0CB05C5CF0", src: [2, 1]}
+  - {code: 7, data: "000A292929252929", src: [1, 2]}
+  - {code: 8, data: "00707CCC70CCF0CC", src: [2, 2]}
+  - {code: 9, data: "2529252925292925", src: [1, 3]}
+  - {code: 10, data: "70CC70CC70CC70CC", src: [2, 3]}
+  - {code: 11, data: "2925292529090300", src: [1, 4]}
+  - {code: 12, data: "70CC70CC7CF0C000", src: [2, 4]}
+  - {code: 13, data: "0A2A292A29270900", src: [1, 5]}
+  - {code: 14, data: "A49F67575FF77C00", src: [2, 5]}
+  - {code: 15, data: "0000000000000202", src: [4, 0]}
+  - {code: 16, data: "0002092699955557", src: [5, 0]}
+  - {code: 17, data: "2C976555557DC200", src: [6, 0]}
+  - {code: 18, data: "00C0F07C5F575F95", src: [7, 0]}
+  - {code: 19, data: "000000000000C0C0", src: [8, 0]}
+  - {code: 20, data: "0A2929A6A5A92500", src: [4, 1]}
+  - {code: 21, data: "5C5C70707070C000", src: [5, 1]}
+  - {code: 22, data: "2725090909090300", src: [7, 1]}
+  - {code: 23, data: "F0FC7CDF7FDFFC00", src: [8, 1]}
+  - {code: 24, data: "00A797BC9777979C", src: [4, 2]}
+  - {code: 25, data: "9F97779F979C9797", src: [4, 3]}
+  - {code: 26, data: "7797977CA7973C00", src: [4, 4]}
+  - {code: 27, data: "A9979FA79FA79F3C", src: [4, 5]}
+  - {code: 28, data: "AA25070000000000", src: [10, 0]}
+  - {code: 29, data: "CAC9C300A49F3002", src: [11, 0]}
+  - {code: 30, data: "965DF3000A290985", src: [12, 0]}
+  - {code: 31, data: "AC5CFC000AC9C31C", src: [13, 0]}
+  - {code: 32, data: "AB977C007070C000", src: [14, 0]}
+  - {code: 33, data: "0902010000000000", src: [11, 1]}
+  - {code: 34, data: "7373002C9C9C9C1C", src: [12, 1]}
+  - {code: 35, data: "171C00B09C9C9CB0", src: [13, 1]}
+  - {code: 36, data: "300209090B000909", src: [12, 2]}
+  - {code: 37, data: "3000C0C0C000C0C0", src: [13, 2]}
+  - {code: 38, data: "0909030303000000", src: [12, 3]}
+  - {code: 39, data: "00A8FCFCFCFCFC00", src: [0, 6]}
+  - {code: 40, data: "0082EBFFFFFF3C00", src: [1, 6]}
+  - {code: 41, data: "0082EBFFFFF3F300", src: [2, 6]}
+  - {code: 42, data: "00283E3F3F3F0F00", src: [3, 6]}
+  - {code: 43, data: "A0FAFFFFFFCF0000", src: [0, 7]}
+  - {code: 44, data: "A8FCFCFCCCCC0000", src: [1, 7]}
+  - {code: 45, data: "A8FEFFFFFF3F0000", src: [2, 7]}
+  - {code: 46, data: "A8FCFCFCFCFC0000", src: [3, 7]}
+  - {code: 47, data: "C0FF00C3CCC3CFCC", src: [2, 8]}
+  - {code: 48, data: "00FF0033CC33FFCC", src: [3, 8]}
+  - {code: 49, data: "03FF0033C333F3C3", src: [4, 8]}
+  - {code: 50, data: "CFCFCCCCCCCFCFCF", src: [2, 9]}
+  - {code: 51, data: "FFFFFFFF3C0000C3", src: [3, 9]}
+  - {code: 52, data: "F3F3333333F3F3F3", src: [4, 9]}
+  - {code: 53, data: "CFCFCFCCCCCCCFCF", src: [2, 10]}
+  - {code: 54, data: "C300003CFFF3FFF3", src: [3, 10]}
+  - {code: 55, data: "F3F3F3333333F3F3", src: [4, 10]}
+  - {code: 56, data: "CFCFCFCFCCC0C3CF", src: [2, 11]}
+  - {code: 57, data: "F3F3C00C3FF3C000", src: [3, 11]}
+  - {code: 58, data: "F3F3F33303C3F33F", src: [4, 11]}
+  - {code: 59, data: "FCF0C00000000000", src: [2, 12]}
+  - {code: 60, data: "0F03030000000000", src: [4, 12]}
+  - {code: 61, data: "03FF0030C033F3C3", src: [7, 8]}
+  - {code: 62, data: "CFCFCFCFCFCFCCCF", src: [5, 9]}
+  - {code: 63, data: "F3F3C0F3CC00CCCC", src: [6, 9]}
+  - {code: 64, data: "F3F3F3F3F333C3F3", src: [7, 9]}
+  - {code: 65, data: "CFCFCFCFC0CFCFCF", src: [5, 10]}
+  - {code: 66, data: "CC000C0C33F3F3C0", src: [6, 10]}
+  - {code: 67, data: "F333333303F3F3F3", src: [7, 10]}
+  - {code: 68, data: "2A2A002828282828", src: [8, 8]}
+  - {code: 69, data: "AAAA000000000000", src: [9, 8]}
+  - {code: 70, data: "A8A8002828282828", src: [10, 8]}
+  - {code: 71, data: "0C3232F2CAF0FF3F", src: [8, 11]}
+  - {code: 72, data: "FFAAAAAAAA28C3FF", src: [9, 11]}
+  - {code: 73, data: "308C8C8FA30FFFFC", src: [10, 11]}
+  - {code: 74, data: "F032F232F230FF0F", src: [8, 12]}
+  - {code: 75, data: "3C3C3C3C3C3CFFC3", src: [9, 12]}
+  - {code: 76, data: "0F8C8F8C8F0CFFF0", src: [10, 12]}
+  - {code: 77, data: "00000C0C0C0C0C3F", src: [12, 9]}
+  - {code: 78, data: "000000000030FC30", src: [14, 9]}
+  - {code: 79, data: "F0F0F0F0F0F0F0F0", src: [11, 10]}
+  - {code: 80, data: "3F3FEFBFBFBF2F00", src: [12, 10]}
+  - {code: 81, data: "0000C3C3C3C30000", src: [13, 10]}
+  - {code: 82, data: "FCECBFBFBFBFEC00", src: [14, 10]}
+  - {code: 83, data: "FFFFF0F0F0F0F0F0", src: [11, 11]}
+  - {code: 84, data: "FFFF00000F0C0C0F", src: [12, 11]}
+  - {code: 85, data: "FFFF000000000000", src: [13, 11]}
+  - {code: 86, data: "FFFF000030F0F030", src: [14, 11]}
+  - {code: 87, data: "3BEFEFEFEFEF3B00", src: [12, 12]}
+  - {code: 88, data: "00C3C3C3C3C30000", src: [13, 12]}
+  - {code: 89, data: "ECBFBFBFBFBFEC00", src: [14, 12]}
+  - {code: 90, data: "030300030303030F", src: [0, 8]}
+  - {code: 91, data: "003000303000C0F0", src: [1, 8]}
+  - {code: 92, data: "0C30333F0F002A00", src: [0, 9]}
+  - {code: 93, data: "F0FCFCFCF000AA00", src: [1, 9]}
+  - {code: 94, data: "0606060101010101", src: [0, 10]}
+  - {code: 95, data: "5454504040404000", src: [1, 10]}
+  - {code: 96, data: "80A8A0A0A0808280", src: [13, 5]}
+  - {code: 97, data: "0000282AAA8A0AA2", src: [14, 5]}
+  - {code: 98, data: "0000000000808080", src: [15, 5]}
+  - {code: 99, data: "8282828082828A8A", src: [13, 6]}
+  - {code: 100, data: "0282028A2822828A", src: [14, 6]}
+  - {code: 101, data: "80800000A0A0A020", src: [15, 6]}
+  - {code: 102, data: "8A28888080808080", src: [13, 7]}
+  - {code: 103, data: "A8000AA800008888", src: [14, 7]}
+  - {code: 104, data: "20A8A8A8A8A8A8A8", src: [15, 7]}
+  - {code: 105, data: "8080808082828202", src: [13, 8]}
+  - {code: 106, data: "8888888A8A8A8A02", src: [14, 8]}
+  - {code: 107, data: "A8A82A2A2A2A2222", src: [15, 8]}
+  - {code: 108, data: "0515151514141400", src: [9, 4]}
+  - {code: 109, data: "555555002AAAAAAA", src: [10, 4]}
+  - {code: 110, data: "55555500A8AAAAAA", src: [11, 4]}
+  - {code: 111, data: "5054545414141400", src: [12, 4]}
+  - {code: 112, data: "1414141414141400", src: [9, 5]}
+  - {code: 113, data: "AAAAAAAAAAAAAAAA", src: [10, 5]}
+  - {code: 114, data: "A0808A8AAAAAAAAA", src: [10, 6]}
+  - {code: 115, data: "1414141414141414", src: [9, 7]}
+  - {code: 116, data: "5555550000000000", src: [17, 1]}
+  - {code: 117, data: "000000303003A3A0", src: [18, 5]}
+  - {code: 118, data: "3C00282828282828", src: [17, 6]}
+  - {code: 119, data: "A2A2A2A202A0A222", src: [18, 6]}
+  - {code: 120, data: "808C808888088888", src: [19, 6]}
+  - {code: 121, data: "00AAA8080A000000", src: [17, 7]}
+  - {code: 122, data: "20202AAA80222A08", src: [18, 7]}
+  - {code: 123, data: "808A8888A8000000", src: [19, 7]}
+  - {code: 124, data: "0008080808080808", src: [18, 8]}
+  - {code: 125, data: "080800082A2A2A00", src: [18, 9]}
+objects:
+- {id: 1, name: column1, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 0, y: 0, w: 4, h: 6}}
+- {id: 2, name: arch, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 4, y: 0, w: 5, h: 6}}
+- {id: 3, name: ceil, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 9, y: 0, w: 6, h: 4}}
+- {id: 4, name: bricks, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 0, y: 6, w: 4, h: 2}}
+- {id: 5, name: banner1, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 2, y: 8, w: 3, h: 5}}
+- {id: 6, name: banner2, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 5, y: 8, w: 3, h: 5}}
+- {id: 7, name: ladder, group: castle, tags: [ladder], non-blockable: true, colpf3: false, region: {x: 8, y: 8, w: 3, h: 1}}
+- {id: 8, name: chest, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 8, y: 11, w: 3, h: 2}}
+- {id: 9, name: alchemy, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 11, y: 9, w: 4, h: 4}}
+- {id: 10, name: torch, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 0, y: 8, w: 2, h: 3}}
+- {id: 11, name: chest_nb, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 8, y: 11, w: 3, h: 2}}
+- {id: 12, name: monk_statue, group: castle, tags: [], non-blockable: false, colpf3: false, region: {x: 13, y: 5, w: 3, h: 4}}
+- {id: 13, name: bottles1, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 12, y: 9, w: 3, h: 2}}
+- {id: 14, name: bottles2, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 12, y: 11, w: 3, h: 2}}
+- {id: 15, name: door_closed, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 9, y: 4, w: 4, h: 4}}
+- {id: 16, name: door_open, group: castle, tags: [], non-blockable: true, colpf3: false, region: {x: 16, y: 1, w: 4, h: 4}}
+- {id: 17, name: candle, group: castle, tags: [], non-blockable: true, colpf3: true, region: {x: 17, y: 5, w: 3, h: 5}}
+- {id: 18, name: brick_small, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 1, y: 6, w: 1, h: 2}}
+- {id: 19, name: brick_small_2, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 1, y: 6, w: 2, h: 1}}
+- {id: 20, name: brick_wall, group: castle, tags: [], non-blockable: false, colpf3: true, region: {x: 8, y: 9, w: 3, h: 2}}
+rooms:
+- id: 1
+  name: K1
+  pos: [0, 0]
+  row_groups: [castle, castle, castle, castle, castle, castle, {group: castle, palette: green}, {group: castle, palette: green}, castle, castle, castle, castle, castle, castle, {group: castle, palette: green}, {group: castle, palette: green}, castle, castle, castle, castle, castle, castle, {group: castle, palette: brown}, {group: castle, palette: brown}]
+  placed:
+  - {object: 20, x: 7, y: 0, repeat-y: 3}
+  - {object: 10, x: 34, y: 0}
+  - {object: 4, x: 0, y: 6, repeat-x: 6}
+  - {object: 18, x: 24, y: 6}
+  - {object: 4, x: 28, y: 6, repeat-x: 3}
+  - {object: 10, x: 17, y: 8}
+  - {object: 8, x: 20, y: 12}
+  - {object: 4, x: 0, y: 14, repeat-x: 4}
+  - {object: 4, x: 19, y: 14, repeat-x: 5}
+  - {object: 18, x: 39, y: 14}
+  - {object: 10, x: 20, y: 16}
+  - {object: 8, x: 11, y: 20}
+  - {object: 4, x: 0, y: 22, repeat-x: 10}
+  - {object: 1, x: 17, y: 0}
+  - {object: 1, x: 28, y: 0}
+  - {object: 7, x: 25, y: 6, repeat-y: 6}
+  - {object: 1, x: 0, y: 16}
+  - {object: 1, x: 11, y: 8}
+  - {object: 1, x: 36, y: 8}
+  - {object: 7, x: 16, y: 14, repeat-y: 8}
+  - {object: 7, x: 25, y: 12, repeat-y: 2}
+  - {object: 2, x: 0, y: 8}
+  - {object: 2, x: 24, y: 16}
+  - {object: 5, x: 31, y: 16}
+  - {object: 5, x: 23, y: 0}
+  - {object: 6, x: 6, y: 16}
+  - {object: 6, x: 37, y: 0}
+  - {object: 9, x: 11, y: 2}
+  - {object: 13, x: 20, y: 20}
+  - {object: 13, x: 33, y: 4}
+  - {object: 17, x: 31, y: 9}
+  - {object: 3, x: 34, y: 16}
+  - {object: 6, x: 3, y: 0}
+  - {object: 11, x: 7, y: 12}
+- id: 2
+  name: K2
+  pos: [-1, 0]
+  row_groups: [castle, castle, castle, castle, castle, castle, {group: castle, palette: green}, {group: castle, palette: green}, castle, castle, castle, castle, castle, castle, {group: castle, palette: green}, {group: castle, palette: green}, castle, castle, castle, castle, castle, castle, {group: castle, palette: brown}, {group: castle, palette: brown}]
+  placed:
+  - {object: 10, x: 1, y: 0}
+  - {object: 4, x: 0, y: 6, repeat-x: 10}
+  - {object: 10, x: 1, y: 8}
+  - {object: 20, x: 24, y: 8, repeat-y: 3}
+  - {object: 10, x: 35, y: 8}
+  - {object: 4, x: 0, y: 14, repeat-x: 4}
+  - {object: 4, x: 19, y: 14, repeat-x: 5}
+  - {object: 18, x: 39, y: 14}
+  - {object: 10, x: 35, y: 16}
+  - {object: 4, x: 0, y: 22, repeat-x: 10}
+  - {object: 7, x: 16, y: 14, repeat-y: 8}
+  - {object: 1, x: 6, y: 8}
+  - {object: 1, x: 24, y: 16}
+  - {object: 1, x: 23, y: 0}
+  - {object: 17, x: 2, y: 17}
+  - {object: 9, x: 15, y: 2}
+  - {object: 3, x: 5, y: 0}
+  - {object: 3, x: 31, y: 0}
+  - {object: 11, x: 9, y: 20}
+  - {object: 11, x: 30, y: 12}
+  - {object: 13, x: 29, y: 20}
+  - {object: 2, x: 15, y: 8}
+  - {object: 6, x: 28, y: 0}
+  - {object: 6, x: 20, y: 16}
+  - {object: 5, x: 11, y: 8}
+- id: 3
+  name: K3
+  pos: [1, 0]
+  row_groups: [{group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}]
+  placed:
+  - {object: 20, x: 37, y: 0, repeat-y: 12}
+  - {object: 10, x: 32, y: 1}
+  - {object: 12, x: 14, y: 2}
+  - {object: 4, x: 0, y: 6, repeat-x: 8}
+  - {object: 19, x: 35, y: 6, repeat-y: 2}
+  - {object: 20, x: 7, y: 8, repeat-y: 3}
+  - {object: 10, x: 27, y: 9}
+  - {object: 8, x: 13, y: 12}
+  - {object: 4, x: 0, y: 14, repeat-x: 9}
+  - {object: 18, x: 36, y: 14}
+  - {object: 10, x: 32, y: 17}
+  - {object: 4, x: 0, y: 22, repeat-x: 9}
+  - {object: 18, x: 36, y: 22}
+  - {object: 7, x: 32, y: 6, repeat-y: 8}
+  - {object: 3, x: 23, y: 0}
+  - {object: 3, x: 18, y: 0}
+  - {object: 3, x: 18, y: 16}
+  - {object: 3, x: 7, y: 16}
+  - {object: 1, x: 7, y: 0}
+  - {object: 2, x: 19, y: 8}
+  - {object: 6, x: 2, y: 0}
+  - {object: 5, x: 2, y: 16}
+  - {object: 1, x: 14, y: 16}
+  - {object: 17, x: 2, y: 9}
+  - {object: 17, x: 26, y: 17}
+- id: 4
+  name: K4
+  pos: [-2, 0]
+  row_groups: [{group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, {group: castle, palette: green}, castle, {group: castle, palette: brown}, {group: castle, palette: brown}]
+  placed:
+  - {object: 20, x: 0, y: 0, repeat-y: 12}
+  - {object: 12, x: 27, y: 2}
+  - {object: 18, x: 3, y: 6}
+  - {object: 4, x: 4, y: 6, repeat-x: 2}
+  - {object: 4, x: 15, y: 6, repeat-x: 6}
+  - {object: 18, x: 39, y: 6}
+  - {object: 10, x: 29, y: 8}
+  - {object: 18, x: 3, y: 14}
+  - {object: 4, x: 4, y: 14, repeat-x: 9}
+  - {object: 10, x: 13, y: 16}
+  - {object: 10, x: 35, y: 16}
+  - {object: 8, x: 17, y: 20}
+  - {object: 18, x: 3, y: 22}
+  - {object: 4, x: 4, y: 22, repeat-x: 9}
+  - {object: 7, x: 12, y: 6, repeat-y: 8}
+  - {object: 1, x: 5, y: 8}
+  - {object: 1, x: 5, y: 16}
+  - {object: 2, x: 22, y: 16}
+  - {object: 17, x: 20, y: 1}
+  - {object: 6, x: 33, y: 8}
+  - {object: 5, x: 24, y: 8}
+  - {object: 3, x: 10, y: 0}
+  - {object: 3, x: 27, y: 16}
+  - {object: 3, x: 16, y: 8}
+  - {object: 2, x: 5, y: 0}
+  - {object: 6, x: 33, y: 0}
+teleports: []
+start: {room: 1, x: 1, y: 1}

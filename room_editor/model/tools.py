@@ -77,9 +77,10 @@ def compute_line_placements(
 ) -> list[ObjectInstance]:
     """Compute ObjectInstances along a line from (x0, y0) to (x1, y1).
 
-    Blockable objects respect existing blockable cells; non-blockable objects skip
-    room overlap checks and avoid only self-overlap within the same stroke.
+    Returns [] if obj has an invalid group/image/region/glyph error.
     """
+    if project.object_placement_error(obj):
+        return []
     if obj.non_blockable:
         occupied: set[tuple[int, int]] = set()
         placed_anchors: set[tuple[int, int]] = set()
@@ -106,9 +107,10 @@ def compute_rect_placements(
 ) -> list[ObjectInstance]:
     """Compute tiled ObjectInstances inside a rectangle.
 
-    Blockable objects respect existing blockable cells; non-blockable objects
-    ignore existing room overlaps.
+    Returns [] if obj has an invalid group/image/region/glyph error.
     """
+    if project.object_placement_error(obj):
+        return []
     rx0 = max(0, min(x0, x1))
     ry0 = max(0, min(y0, y1))
     rx1 = min(ROOM_WIDTH - 1, max(x0, x1))
@@ -145,11 +147,10 @@ def compute_fill_placements(
 ) -> list[ObjectInstance]:
     """Flood-fill contiguous space starting at (start_x, start_y) in object steps.
 
-    For blockable objects, stops at existing blockable cells.
-    For non-blockable objects, ignores non-blockable overlaps; if started outside
-    blockable cells, stops at blockable walls (so interior fills work naturally),
-    and if started on a blockable cell, fills across matching cells without error.
+    Returns [] if obj has an invalid group/image/region/glyph error.
     """
+    if project.object_placement_error(obj):
+        return []
     blockable_cells = set(project.room_blockable_cells(room).keys())
     if obj.non_blockable:
         start_on_blockable = any(

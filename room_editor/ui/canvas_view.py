@@ -44,6 +44,8 @@ from room_editor.model.graph import (
 )
 from room_editor.model.project import (
     MAX_ROOMS,
+    ROOM_DISPLAY_HEIGHT,
+    ROOM_DISPLAY_WIDTH,
     ROOM_HEIGHT,
     ROOM_WIDTH,
     Project,
@@ -72,8 +74,9 @@ class RoomCanvasScene(QWidget):
     teleport_rooms_picked = Signal(int, int)
     zoom_changed = Signal(float)
 
-    BASE_CELL_W = 160
-    BASE_CELL_H = 80
+    BASE_CELL_SCALE = 0.5
+    BASE_CELL_W = ROOM_DISPLAY_WIDTH * BASE_CELL_SCALE
+    BASE_CELL_H = ROOM_DISPLAY_HEIGHT * BASE_CELL_SCALE
 
     def __init__(self, renderer: QtRenderer, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -631,13 +634,16 @@ class RoomCanvasView(QWidget):
             QMessageBox.warning(self, "Room Limit", f"Cannot exceed {MAX_ROOMS} rooms.")
             return
         gx, gy = self._find_free_grid_cell()
-        default_group = self._project.object_groups[0].name if self._project.object_groups else ""
+        default_grp = self._project.object_groups[0] if self._project.object_groups else None
         room = Room(
             id=new_id,
             name=self._project.next_free_room_name(),
             pos=(gx, gy),
         )
-        room.set_all_row_groups(default_group)
+        if default_grp is not None:
+            room.set_all_row_groups(default_grp.name, default_grp.default_palette_name)
+        else:
+            room.set_all_row_groups("", "")
         self._undo_stack.push_and_execute(AddRoomCommand(self._project, room))
         self._selected_room_id = room.id
         self.model_changed.emit()

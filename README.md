@@ -35,7 +35,7 @@ make all
 
 Kolejność etapów `make all`:
 1. `assets` — konwersja obrazu tytułowego (`images/title.png`) do zestawów znaków ANTIC 4 (`.fnt`) oraz metadanych JSON (`scripts/png_to_charset.py`).
-2. `data` — kompilacja metadanych JSON do spakowanych danych RLE, Display Listy oraz 24-wierszowych tablic DLI w katalogu `gen/` (`scripts/compile_title_screen.py`).
+2. `data` — kompilacja metadanych JSON ekranu tytułowego (`scripts/compile_title_screen.py`) oraz projektu komnat [`rooms.yaml`](rooms.yaml) + grafik PNG grup obiektów do plików MADS w katalogu `gen/` (`scripts/rooms_compile.py`; opis formatu: [`docs/rooms-data-format.md`](docs/rooms-data-format.md)).
 3. `audio` — walidacja i kompilacja utworu tytułowego ([`music/title.dsl`](music/title.dsl)) oraz pliku aranżacji ([`music/title.arrangement.json`](music/title.arrangement.json)) do kodu MADS (`gen/title_music.asm`, format v2 SoA) przez skrypt [`scripts/compile_music.py`](scripts/compile_music.py) i wbudowany katalog pakietu `atari_music`.
 4. `xex` — asemblacja `main.asm` przy użyciu MADS do pliku wynikowego `funky_koval.xex` (wraz z plikami `.lst` i `.lab` w `gen/`).
 5. `tests` — uruchomienie testów automatycznych (`python -m pytest -v`), w tym testów logiki 6502 (RLE, PMG, fala sinusowa DLI, odtwarzacz POKEY v2) w emulatorze `py65` oraz testów edytora Sprite Studio.
@@ -61,7 +61,7 @@ Uruchomienie edytora:
 
 ## Room Editor
 
-Edytor komnat, grup obiektów (`.fnt` + paleta PAL) oraz układów ANTIC 4 (`40×20`) z zapisem do formatu `.yaml` ([`room_editor/`](room_editor/), specyfikacja: [`room_editor/SPECIFICATION.md`](room_editor/SPECIFICATION.md)).
+Edytor komnat, grup obiektów (indeksowany obraz PNG + mapowanie kolorów + nazwane palety PAL, z automatyczną tabelą do 127 unikalnych glifów), przypisań par `(grupa, paleta)` dla każdego z 24 wierszy oraz układów ANTIC 4 (`40×24`) z zapisem do formatu `.yaml` w wersji 4 ([`room_editor/`](room_editor/), specyfikacja: [`room_editor/SPECIFICATION.md`](room_editor/SPECIFICATION.md)).
 
 Uruchomienie edytora komnat:
 
@@ -83,7 +83,8 @@ Uruchomienie edytora komnat:
 | [`lib/`](lib/) | Biblioteki pomocnicze 6502: obsługa PMG ([`pmg.asm`](lib/pmg.asm)), dekompresja RLE ([`rle.asm`](lib/rle.asm)), relokowalny 4-kanałowy odtwarzacz muzyki POKEY v2 ([`player.asm`](lib/player.asm)) |
 | [`scenes/`](scenes/) | Sceny gry: ekran tytułowy ([`title.asm`](scenes/title.asm) — grafika ANTIC 4, napisy PMG, animacja falowa 5. gracza i muzyka tytułowa), gra ([`game.asm`](scenes/game.asm)), ekran końcowy ([`gameover.asm`](scenes/gameover.asm)) |
 | [`music/`](music/) | Źródłowe kompozycje muzyczne w formacie Music DSL ([`title.dsl`](music/title.dsl)) oraz manifesty aranżacji ([`title.arrangement.json`](music/title.arrangement.json)) |
-| [`scripts/`](scripts/) | Narzędzia Python do konwersji grafiki, kompilacji danych i walidacji mapy pamięci |
+| [`scripts/`](scripts/) | Narzędzia Python do konwersji grafiki, kompilacji danych (`rooms_compile.py`, `compile_title_screen.py`, `compile_music.py`) i walidacji mapy pamięci |
+| [`docs/`](docs/) | Dokumentacja techniczna formatów danych ([`rooms-data-format.md`](docs/rooms-data-format.md)) |
 | [`sprite_studio/`](sprite_studio/) | Edytor GUI (PySide6) sprajtów i klatek animacji |
 | [`room_editor/`](room_editor/) | Edytor GUI (PySide6) komnat ANTIC 4, grup obiektów i teleportów |
 | [`sprites/`](sprites/) | Dane źródłowe sprajtów (`project.sprite.json`) |

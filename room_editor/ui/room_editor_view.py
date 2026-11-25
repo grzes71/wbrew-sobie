@@ -1,4 +1,4 @@
-"""Room Editor tab: 40x20 layout editing, per-row groups, tools, and selection."""
+"""Room Editor tab: 40x24 layout editing, per-row groups, tools, and selection."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from room_editor.model.commands import (
     ZOrderAction,
 )
 from room_editor.model.graph import compute_edge_passages, get_adjacent_rooms
+from room_editor.model.palette import PalPaletteTable
 from room_editor.model.project import (
     ROOM_HEIGHT,
     ROOM_WIDTH,
@@ -37,6 +38,7 @@ from room_editor.model.project import (
     ObjectInstance,
     Project,
     Room,
+    RowAssignment,
 )
 from room_editor.model.tools import (
     compute_fill_placements,
@@ -49,19 +51,22 @@ ToolName = Literal["stamp", "eraser", "fill", "line", "rect", "select"]
 
 
 class RowGroupGutter(QWidget):
-    """20-row interactive gutter showing and editing each row's assigned object group."""
+    """24-row interactive gutter showing each row's (group, palette) and color chip."""
 
     row_clicked = Signal(int, bool)  # (row_index, shift_held)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, pal_table: PalPaletteTable, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._pal_table = pal_table
+        self._project: Project | None = None
         self._room: Room | None = None
         self._zoom = 2
         self._selected_row: int | None = None
-        self.setFixedWidth(120)
+        self.setFixedWidth(196)
         self._update_height()
 
-    def set_room(self, room: Room | None) -> None:
+    def set_context(self, project: Project | None, room: Room | None) -> None:
+        self._project = project
         self._room = room
         self.update()
 
@@ -85,6 +90,7 @@ class RowGroupGutter(QWidget):
         font.setPointSize(8)
         painter.setFont(font)
 
+        chip_w = 24
         for r in range(ROOM_HEIGHT):
             y = r * row_h
             rect = QRect(0, y, self.width() - 1, row_h)
@@ -95,12 +101,47 @@ class RowGroupGutter(QWidget):
             painter.setPen(QColor(70, 74, 86))
             painter.drawRect(rect)
 
-            grp_name = self._room.row_groups[r] if self._room else ""
-            painter.setPen(QColor(225, 225, 230) if grp_name else QColor(220, 90, 90))
+            ra = self._room.row_groups[r] if self._room else RowAssignment()
+            grp = (
+                self._project.get_group(ra.group)
+                if self._project is not None and ra.group
+                else None
+            )
+            pal = grp.get_palette(ra.palette) if grp is not None else None
+            valid = grp is not None and pal is not None
+
+            # Palette swatch chip (COLBK + 4 PF bars)
+            chip_rect = QRect(3, y + 2, chip_w, max(4, row_h - 4))
+            if valid and pal is not None:
+                bg_rgb = self._pal_table.rgb(pal.colbk)
+                painter.fillRect(chip_rect, QColor(*bg_rgb))
+                sub_w = max(1, (chip_rect.width() - 2) // 4)
+                for slot in range(1, 5):
+                    s_rgb = self._pal_table.rgb(pal.color_for_slot(slot))
+                    painter.fillRect(
+                        chip_rect.left() + 1 + (slot - 1) * sub_w,
+                        chip_rect.top() + 2,
+                        sub_w,
+                        max(2, chip_rect.height() - 4),
+                        QColor(*s_rgb),
+                    )
+                painter.setPen(QColor(110, 115, 130))
+                painter.drawRect(chip_rect)
+            else:
+                painter.fillRect(chip_rect, QColor(125, 50, 50))
+
+            if not ra.group:
+                label = f"{r:02d}: (none)"
+            elif grp is not None and (not ra.palette or ra.palette == grp.default_palette_name):
+                label = f"{r:02d}: {ra.group}"
+            else:
+                label = f"{r:02d}: {ra.group}/{ra.palette}"
+
+            painter.setPen(QColor(225, 225, 230) if valid else QColor(235, 95, 95))
             painter.drawText(
-                rect.adjusted(4, 0, -4, 0),
+                rect.adjusted(chip_w + 8, 0, -4, 0),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                f"{r:02d}: {grp_name or '(none)'}",
+                label,
             )
         painter.end()
 
@@ -113,9 +154,9 @@ class RowGroupGutter(QWidget):
 
 
 class RoomGridCanvas(QWidget):
-    """40x20 interactive ANTIC 4 room layout canvas with tool previews and selection."""
+    """40x24 interactive ANTIC 4 room layout canvas with tool previews and selection."""
 
-    cursor_moved = Signal(int, int, int, str)  # (x, y, char_code, row_group)
+    cursor_moved = Signal(int, int, int, str, str)  # (x, y, char_code, row_group, row_palette)
     zoom_changed = Signal(int)
     model_changed = Signal()
 
@@ -391,8 +432,8 @@ class RoomGridCanvas(QWidget):
 
         grid = self._project.compose_room(self._room)
         char_code = grid[cy][cx]
-        row_grp = self._room.row_groups[cy] if 0 <= cy < ROOM_HEIGHT else ""
-        self.cursor_moved.emit(cx, cy, char_code, row_grp)
+        ra = self._room.row_groups[cy] if 0 <= cy < ROOM_HEIGHT else RowAssignment()
+        self.cursor_moved.emit(cx, cy, char_code, ra.group, ra.palette)
         self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
@@ -580,9 +621,9 @@ class RoomGridCanvas(QWidget):
 
 
 class RoomEditorView(QWidget):
-    """Tab widget for editing a single 40x20 room's layout and per-row object groups."""
+    """Tab widget for editing a single 40x24 room's layout and per-row (group, palette)."""
 
-    cursor_status = Signal(int, int, int, str)
+    cursor_status = Signal(int, int, int, str, str)
     model_changed = Signal()
 
     def __init__(self, renderer: QtRenderer, parent: QWidget | None = None) -> None:
@@ -592,15 +633,16 @@ class RoomEditorView(QWidget):
         self._undo_stack = UndoStack()
         self._current_room_id: int | None = None
         self._last_clicked_row: int | None = None
+        self._preview_palette_by_group: dict[str, str] = {}
 
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         root = QHBoxLayout(self)
 
-        # Left Panel: Room selector, row-group controls, filterable object palette
+        # Left Panel: Room selector, row-group/palette controls, filterable object palette
         left = QWidget()
-        left.setMaximumWidth(310)
+        left.setMaximumWidth(330)
         left_layout = QVBoxLayout(left)
 
         left_layout.addWidget(QLabel("Active Room:"))
@@ -608,16 +650,20 @@ class RoomEditorView(QWidget):
         self._room_combo.currentIndexChanged.connect(self._on_room_combo_changed)
         left_layout.addWidget(self._room_combo)
 
-        left_layout.addWidget(QLabel("Group for Row Assignment:"))
-        row_grp_bar = QHBoxLayout()
+        left_layout.addWidget(QLabel("Group & Palette for Row Assignment:"))
         self._row_group_combo = QComboBox()
+        self._row_group_combo.currentIndexChanged.connect(self._on_row_group_combo_changed)
+        self._row_palette_combo = QComboBox()
+        row_grp_bar = QHBoxLayout()
         row_grp_bar.addWidget(self._row_group_combo, 1)
-        btn_all_rows = QPushButton("Set All 20 Rows")
-        btn_all_rows.clicked.connect(self._on_set_all_rows)
-        row_grp_bar.addWidget(btn_all_rows)
+        row_grp_bar.addWidget(self._row_palette_combo, 1)
         left_layout.addLayout(row_grp_bar)
 
-        hint_lbl = QLabel("Tip: Click a row in the left gutter to assign its group; Shift+Click to assign a range.")
+        btn_all_rows = QPushButton(f"Set All {ROOM_HEIGHT} Rows")
+        btn_all_rows.clicked.connect(self._on_set_all_rows)
+        left_layout.addWidget(btn_all_rows)
+
+        hint_lbl = QLabel("Tip: Click a row in the left gutter to assign its (group, palette); Shift+Click for a range.")
         hint_lbl.setWordWrap(True)
         hint_lbl.setStyleSheet("color: #aaa; font-size: 11px;")
         left_layout.addWidget(hint_lbl)
@@ -625,12 +671,19 @@ class RoomEditorView(QWidget):
         # Filters (F-20)
         filter_row = QHBoxLayout()
         self._filter_group = QComboBox()
-        self._filter_group.currentIndexChanged.connect(self._refresh_object_list)
+        self._filter_group.currentIndexChanged.connect(self._on_filter_or_preview_changed)
         self._filter_tag = QComboBox()
         self._filter_tag.currentIndexChanged.connect(self._refresh_object_list)
         filter_row.addWidget(self._filter_group)
         filter_row.addWidget(self._filter_tag)
         left_layout.addLayout(filter_row)
+
+        prev_row = QHBoxLayout()
+        prev_row.addWidget(QLabel("Preview Palette:"))
+        self._preview_pal_combo = QComboBox()
+        self._preview_pal_combo.currentIndexChanged.connect(self._on_preview_pal_combo_changed)
+        prev_row.addWidget(self._preview_pal_combo, 1)
+        left_layout.addLayout(prev_row)
 
         left_layout.addWidget(QLabel("Objects:"))
         self._object_list = QListWidget()
@@ -639,7 +692,7 @@ class RoomEditorView(QWidget):
 
         root.addWidget(left, 1)
 
-        # Center Panel: Tools bar + Gutter + 40x20 Canvas
+        # Center Panel: Tools bar + Gutter + 40x24 Canvas
         center = QVBoxLayout()
         tools_bar = QHBoxLayout()
         self._tool_group = QButtonGroup(self)
@@ -680,7 +733,7 @@ class RoomEditorView(QWidget):
 
         editor_body = QHBoxLayout()
         editor_body.setSpacing(2)
-        self._gutter = RowGroupGutter(self)
+        self._gutter = RowGroupGutter(self._renderer.pal_table, self)
         self._gutter.row_clicked.connect(self._on_gutter_row_clicked)
         self._canvas = RoomGridCanvas(self._renderer, self)
         self._canvas.cursor_moved.connect(self.cursor_status)
@@ -753,8 +806,10 @@ class RoomEditorView(QWidget):
         )
         self._room_combo.blockSignals(False)
 
-        # Row group combo
+        # Row group & palette combos
         prev_row_grp = self._row_group_combo.currentData()
+        prev_row_pal = self._row_palette_combo.currentData()
+        self._row_group_combo.blockSignals(True)
         self._row_group_combo.clear()
         for grp in self._project.object_groups:
             self._row_group_combo.addItem(grp.name, grp.name)
@@ -762,6 +817,8 @@ class RoomEditorView(QWidget):
             idx = self._row_group_combo.findData(prev_row_grp)
             if idx >= 0:
                 self._row_group_combo.setCurrentIndex(idx)
+        self._row_group_combo.blockSignals(False)
+        self._populate_row_palette_combo(preferred=prev_row_pal)
 
         # Filter combos
         prev_fg = self._filter_group.currentData()
@@ -793,9 +850,74 @@ class RoomEditorView(QWidget):
             if self._current_room_id is not None
             else None
         )
-        self._gutter.set_room(room)
+        self._gutter.set_context(self._project, room)
         self._canvas.set_context(self._project, self._undo_stack, room)
+        self._sync_preview_pal_combo()
         self._refresh_object_list()
+
+    def set_preview_palette(self, group_name: str, palette_name: str) -> None:
+        if group_name and palette_name:
+            self._preview_palette_by_group[group_name] = palette_name
+            self._sync_preview_pal_combo()
+            self._refresh_object_list()
+
+    def _populate_row_palette_combo(self, preferred: str | None = None) -> None:
+        grp_name = self._row_group_combo.currentData()
+        grp = self._project.get_group(grp_name) if grp_name else None
+        self._row_palette_combo.blockSignals(True)
+        self._row_palette_combo.clear()
+        if grp is not None and grp.palettes:
+            for pal in grp.palettes:
+                self._row_palette_combo.addItem(pal.name, pal.name)
+            idx = self._row_palette_combo.findData(preferred) if preferred else -1
+            self._row_palette_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self._row_palette_combo.setEnabled(True)
+        else:
+            self._row_palette_combo.setEnabled(False)
+        self._row_palette_combo.blockSignals(False)
+
+    def _on_row_group_combo_changed(self, _idx: int) -> None:
+        # Preserve same-named palette if the newly selected group also defines it; else first palette
+        prev_pal = self._row_palette_combo.currentData()
+        self._populate_row_palette_combo(preferred=prev_pal)
+
+    def _preview_target_group_name(self) -> str:
+        fg = self._filter_group.currentData() or ""
+        if fg:
+            return str(fg)
+        cur_item = self._object_list.currentItem()
+        if cur_item is not None:
+            obj = self._project.get_object(int(cur_item.data(Qt.ItemDataRole.UserRole)))
+            if obj is not None:
+                return obj.group
+        return self._project.object_groups[0].name if self._project.object_groups else ""
+
+    def _sync_preview_pal_combo(self) -> None:
+        grp_name = self._preview_target_group_name()
+        grp = self._project.get_group(grp_name) if grp_name else None
+        self._preview_pal_combo.blockSignals(True)
+        self._preview_pal_combo.clear()
+        if grp is not None and grp.palettes:
+            for p in grp.palettes:
+                self._preview_pal_combo.addItem(p.name, p.name)
+            pref = self._preview_palette_by_group.get(grp.name, grp.default_palette_name)
+            idx = self._preview_pal_combo.findData(pref)
+            self._preview_pal_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self._preview_pal_combo.setEnabled(True)
+        else:
+            self._preview_pal_combo.setEnabled(False)
+        self._preview_pal_combo.blockSignals(False)
+
+    def _on_filter_or_preview_changed(self, _idx: int) -> None:
+        self._sync_preview_pal_combo()
+        self._refresh_object_list()
+
+    def _on_preview_pal_combo_changed(self, _idx: int) -> None:
+        grp_name = self._preview_target_group_name()
+        pal_name = self._preview_pal_combo.currentData() or ""
+        if grp_name and pal_name:
+            self._preview_palette_by_group[grp_name] = str(pal_name)
+            self._refresh_object_list()
 
     def _refresh_object_list(self) -> None:
         selected_id = (
@@ -814,11 +936,24 @@ class RoomEditorView(QWidget):
             if tag_filter and tag_filter not in obj.tags:
                 continue
             grp = self._project.get_group(obj.group)
-            pix = self._renderer.render_object_pixmap(obj, grp, scale=2)
-            flags = " [non-block]" if obj.non_blockable else ""
+            preview_pal = None
+            if grp is not None:
+                pal_name = self._preview_palette_by_group.get(grp.name, grp.default_palette_name)
+                preview_pal = grp.get_palette(pal_name)
+            pix = self._renderer.render_object_pixmap(
+                obj, grp, scale=2, project=self._project, palette=preview_pal
+            )
+            flags = []
+            if obj.non_blockable:
+                flags.append("non-block")
+            if obj.colpf3:
+                flags.append("COLPF3")
+            if self._project.object_placement_error(obj):
+                flags.append("ERR")
+            flag_str = f" [{' | '.join(flags)}]" if flags else ""
             item = QListWidgetItem(
                 pix,
-                f"#{obj.id} {obj.name} ({obj.w}x{obj.h}){flags}",
+                f"#{obj.id} {obj.name} ({obj.w}x{obj.h}){flag_str}",
             )
             item.setData(Qt.ItemDataRole.UserRole, obj.id)
             self._object_list.addItem(item)
@@ -838,7 +973,7 @@ class RoomEditorView(QWidget):
             if self._current_room_id is not None
             else None
         )
-        self._gutter.set_room(room)
+        self._gutter.set_context(self._project, room)
         self._canvas.set_context(self._project, self._undo_stack, room)
 
     def _on_object_selected(self, row: int) -> None:
@@ -848,6 +983,8 @@ class RoomEditorView(QWidget):
         item = self._object_list.item(row)
         obj_id = int(item.data(Qt.ItemDataRole.UserRole))
         self._canvas.set_active_object(self._project.get_object(obj_id))
+        if not (self._filter_group.currentData() or ""):
+            self._sync_preview_pal_combo()
 
     def _on_gutter_row_clicked(self, row: int, shift_held: bool) -> None:
         room = (
@@ -856,16 +993,18 @@ class RoomEditorView(QWidget):
             else None
         )
         grp_name = self._row_group_combo.currentData()
+        pal_name = self._row_palette_combo.currentData() or ""
         if room is None or not grp_name:
             return
+        entry = RowAssignment(str(grp_name), str(pal_name))
         new_rows = list(room.row_groups)
         if shift_held and self._last_clicked_row is not None:
             lo = min(self._last_clicked_row, row)
             hi = max(self._last_clicked_row, row)
             for r in range(lo, hi + 1):
-                new_rows[r] = grp_name
+                new_rows[r] = entry
         else:
-            new_rows[row] = grp_name
+            new_rows[row] = entry
         self._last_clicked_row = row
         self._gutter.set_selected_row(row)
         if new_rows != room.row_groups:
@@ -879,9 +1018,10 @@ class RoomEditorView(QWidget):
             else None
         )
         grp_name = self._row_group_combo.currentData()
+        pal_name = self._row_palette_combo.currentData() or ""
         if room is None or not grp_name:
             return
-        new_rows = [grp_name] * ROOM_HEIGHT
+        new_rows = [RowAssignment(str(grp_name), str(pal_name))] * ROOM_HEIGHT
         if new_rows != room.row_groups:
             self._undo_stack.push_and_execute(SetRoomRowGroupsCommand(room, new_rows))
             self.model_changed.emit()

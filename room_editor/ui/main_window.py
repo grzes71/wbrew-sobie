@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
 )
 
-from room_editor.io.fnt import FontLoadError, load_fnt, to_relative_posix_path
+from room_editor.io.png import PngLoadError, load_png, to_relative_posix_path
 from room_editor.io.yaml_io import ProjectIOError, load_project, save_project
 from room_editor.model.commands import UndoStack, ZOrderAction
 from room_editor.model.palette import load_default_pal_palette
@@ -72,6 +72,9 @@ class MainWindow(QMainWindow):
         self.objects_view = ObjectsView(self.renderer, self.pal_table, self)
         self.objects_view.set_project_file_provider(lambda: self.project_path)
         self.objects_view.model_changed.connect(self._on_model_changed)
+        self.objects_view.preview_palette_changed.connect(
+            self.room_editor_view.set_preview_palette
+        )
 
         self.settings_view = SettingsView(self.pal_table, self)
         self.settings_view.model_changed.connect(self._on_model_changed)
@@ -225,10 +228,23 @@ class MainWindow(QMainWindow):
         self.room_editor_view.set_current_room(room_id)
         self.tabs.setCurrentWidget(self.room_editor_view)
 
-    def _on_cursor_status(self, x: int, y: int, char_code: int, row_group: str) -> None:
+    def _on_cursor_status(
+        self,
+        x: int,
+        y: int,
+        char_code: int,
+        row_group: str,
+        row_palette: str,
+    ) -> None:
         self._lbl_pos.setText(f"Pos: ({x}, {y})")
-        self._lbl_char.setText(f"Char: ${char_code:02X} ({char_code})" if char_code else "Char: 0 (empty)")
-        self._lbl_group.setText(f"Group: {row_group or '(none)'}")
+        self._lbl_char.setText(
+            f"Char: ${char_code:02X} ({char_code})" if char_code else "Char: 0 (empty)"
+        )
+        if row_group:
+            pal_disp = row_palette or "(default)"
+            self._lbl_group.setText(f"Row: {row_group} / {pal_disp}")
+        else:
+            self._lbl_group.setText("Row: (none)")
 
     def _toggle_grid(self) -> None:
         if self._text_input_focused():
@@ -331,13 +347,34 @@ class MainWindow(QMainWindow):
         self.undo_stack.clear()
         self.renderer.clear_cache()
 
-        if result.missing_charsets:
-            self._handle_missing_charsets(result.missing_charsets, proj_path)
+        if result.invalid_images:
+            inv_details = "\n".join(
+                f"• Group '{g}' ({p}): {err}" for g, p, err in result.invalid_images
+            )
+            QMessageBox.warning(
+                self,
+                "Invalid PNG Images",
+                f"Some PNG images failed validation:\n{inv_details}",
+            )
+
+        if result.missing_images:
+            self._handle_missing_images(result.missing_images, proj_path)
+
+        if result.glyph_table_mismatches:
+            mm_details = "\n".join(
+                f"• Group '{g}': {msg}" for g, msg in result.glyph_table_mismatches
+            )
+            QMessageBox.warning(
+                self,
+                "Glyph Table Regenerated",
+                "Stored glyph tables in the YAML did not match the PNG images and were recomputed:\n\n"
+                + mm_details,
+            )
 
         self._bind_context()
         self._update_window_title()
 
-    def _handle_missing_charsets(
+    def _handle_missing_images(
         self,
         missing: list[tuple[str, str]],
         proj_path: Path,
@@ -345,32 +382,38 @@ class MainWindow(QMainWindow):
         details = "\n".join(f"• Group '{g}': {p or '(empty path)'}" for g, p in missing)
         ans = QMessageBox.warning(
             self,
-            "Missing Charset Files",
-            f"Some .fnt files could not be loaded:\n{details}\n\n"
-            "Would you like to locate replacement .fnt files now?",
+            "Missing PNG Files",
+            f"Some PNG files could not be found:\n{details}\n\n"
+            "Would you like to locate replacement PNG files now?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if ans != QMessageBox.StandardButton.Yes:
             return
 
+        changed = False
         for grp_name, old_path in missing:
             grp = self.project.get_group(grp_name)
             if grp is None:
                 continue
             new_path, _ = QFileDialog.getOpenFileName(
                 self,
-                f"Locate .fnt for group '{grp_name}' (was: {old_path})",
+                f"Locate PNG for group '{grp_name}' (was: {old_path})",
                 str(proj_path.parent),
-                "Atari Font (*.fnt);;All Files (*)",
+                "PNG Images (*.png);;All Files (*)",
             )
             if not new_path:
                 continue
             try:
-                fnt_path = Path(new_path)
-                grp.charset = load_fnt(fnt_path)
-                grp.charset_path = to_relative_posix_path(fnt_path, proj_path)
-            except FontLoadError as exc:
-                QMessageBox.critical(self, "Invalid Charset", str(exc))
+                png_path = Path(new_path)
+                grp.image = load_png(png_path)
+                grp.image_path = to_relative_posix_path(png_path, proj_path)
+                grp.image_status = "ok"
+                grp.image_error = ""
+                changed = True
+            except PngLoadError as exc:
+                QMessageBox.critical(self, "Invalid PNG Image", str(exc))
+        if changed:
+            self.project.rebuild_glyph_tables()
 
     def action_save(self) -> bool:
         if self.project_path is None:

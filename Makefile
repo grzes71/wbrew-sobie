@@ -26,6 +26,16 @@ TITLE_ARRANGEMENT   := music/title.arrangement.json
 TITLE_MUSIC_JSON    := $(GEN_DIR)/title_music.json
 TITLE_MUSIC_ASM     := $(GEN_DIR)/title_music.asm
 
+ROOMS_YAML          := rooms.yaml
+ROOMS_COMPILER      := scripts/rooms_compile.py
+ROOMS_PNGS          := $(if $(wildcard $(ROOMS_YAML)),$(shell $(PYTHON) $(ROOMS_COMPILER) --list-deps $(ROOMS_YAML)),)
+ROOMS_ASM_FILES     := $(GEN_DIR)/rooms_defs.asm \
+                       $(GEN_DIR)/charsets.asm \
+                       $(GEN_DIR)/styles.asm \
+                       $(GEN_DIR)/objects.asm \
+                       $(GEN_DIR)/rooms.asm \
+                       $(GEN_DIR)/teleports.asm
+
 ASM_SRCS        := main.asm hardware.asm colors.asm zeropage.asm \
                    lib/rle.asm lib/pmg.asm lib/player.asm engine/input.asm engine/dli.asm \
                    scenes/title.asm scenes/game.asm scenes/gameover.asm
@@ -44,13 +54,17 @@ $(TITLE_JSON): $(TITLE_PNG) $(GAME_FONT) scripts/png_to_charset.py
 	$(PYTHON) scripts/png_to_charset.py $(TITLE_PNG) --font-output $(TITLE_FNT_BASE) --json-output $(TITLE_JSON) --fill-font $(GAME_FONT)
 
 # ------------------------------------------------------------------------------
-# 2. Data compilation (JSON -> RLE compressed ASM + Display List + DLI tables)
+# 2. Data compilation (JSON -> RLE ASM; YAML + PNGs -> Room & Charset ASM)
 # ------------------------------------------------------------------------------
-data: $(TITLE_DATA_ASM)
+data: $(TITLE_DATA_ASM) $(ROOMS_ASM_FILES)
 
 $(TITLE_DATA_ASM): $(TITLE_JSON) scripts/compile_title_screen.py
 	@$(MKDIR) $(GEN_DIR)
 	$(PYTHON) scripts/compile_title_screen.py --json-input $(TITLE_JSON) --gen-dir $(GEN_DIR) --asm-output $(TITLE_DATA_ASM)
+
+$(ROOMS_ASM_FILES) &: $(ROOMS_YAML) $(ROOMS_PNGS) $(ROOMS_COMPILER)
+	@$(MKDIR) $(GEN_DIR)
+	$(PYTHON) $(ROOMS_COMPILER) $(ROOMS_YAML) --out $(GEN_DIR)
 
 # ------------------------------------------------------------------------------
 # 3. Audio compilation (Music DSL + arrangement JSON -> JSON IR -> MADS v2 SoA ASM)
@@ -66,7 +80,7 @@ $(TITLE_MUSIC_JSON) $(TITLE_MUSIC_ASM): $(TITLE_DSL) $(TITLE_ARRANGEMENT) script
 # ------------------------------------------------------------------------------
 xex: $(TARGET)
 
-$(TARGET): $(ASM_SRCS) $(TITLE_DATA_ASM) $(TITLE_MUSIC_ASM)
+$(TARGET): $(ASM_SRCS) $(TITLE_DATA_ASM) $(TITLE_MUSIC_ASM) $(ROOMS_ASM_FILES)
 	@$(MKDIR) $(GEN_DIR)
 	$(MADS) main.asm -o:$(TARGET) -l:$(GEN_DIR)/main.lst -t:$(GEN_DIR)/main.lab
 

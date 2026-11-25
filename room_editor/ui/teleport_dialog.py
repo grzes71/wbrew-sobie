@@ -87,8 +87,8 @@ class TeleportDialog(QDialog):
         sy.setValue(10)
 
         form.addRow("Room:", combo)
-        form.addRow("X (0..39):", sx)
-        form.addRow("Y (0..19):", sy)
+        form.addRow(f"X (0..{ROOM_WIDTH - 1}):", sx)
+        form.addRow(f"Y (0..{ROOM_HEIGHT - 1}):", sy)
         parent_layout.addWidget(box)
         return combo, sx, sy
 
@@ -148,8 +148,8 @@ class StartPositionDialog(QDialog):
             self._sy.setValue(17)
 
         form.addRow("Room:", self._room_combo)
-        form.addRow("X (0..39):", self._sx)
-        form.addRow("Y (0..19):", self._sy)
+        form.addRow(f"X (0..{ROOM_WIDTH - 1}):", self._sx)
+        form.addRow(f"Y (0..{ROOM_HEIGHT - 1}):", self._sy)
         layout.addLayout(form)
 
         buttons = QDialogButtonBox(

@@ -143,8 +143,8 @@ def is_cell_blocking(project: Project, room: Room, x: int, y: int) -> bool:
 def compute_edge_passages(project: Project, room_a: Room, room_b: Room) -> list[int]:
     """Return sorted cell indices along the shared edge where both rooms are non-blocking.
 
-    For left/right adjacency, returns row indices in 0..19.
-    For top/bottom adjacency, returns column indices in 0..39.
+    For left/right adjacency, returns row indices in 0..ROOM_HEIGHT - 1 (0..23).
+    For top/bottom adjacency, returns column indices in 0..ROOM_WIDTH - 1 (0..39).
     Returns [] if rooms are not adjacent.
     """
     dx = room_b.pos[0] - room_a.pos[0]

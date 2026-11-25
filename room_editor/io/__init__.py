@@ -1,9 +1,10 @@
-"""File I/O helpers for .fnt charsets and .yaml projects (no Qt imports)."""
+"""File I/O helpers for indexed PNG images and .yaml v2 projects (no Qt imports)."""
 
-from room_editor.io.fnt import (
-    FontLoadError,
-    load_fnt,
-    resolve_fnt_path,
+from room_editor.io.png import (
+    PngLoadError,
+    PngMissingError,
+    load_png,
+    resolve_image_path,
     to_relative_posix_path,
 )
 from room_editor.io.yaml_io import (
@@ -17,9 +18,10 @@ from room_editor.io.yaml_io import (
 )
 
 __all__ = [
-    "FontLoadError",
-    "load_fnt",
-    "resolve_fnt_path",
+    "PngLoadError",
+    "PngMissingError",
+    "load_png",
+    "resolve_image_path",
     "to_relative_posix_path",
     "ProjectIOError",
     "UnsupportedVersionError",

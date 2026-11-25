@@ -7,14 +7,16 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Literal
 
-from room_editor.model.charset import CharsetData
-from room_editor.model.palette import Palette
+from room_editor.model.glyphs import IndexedImage, StampRegion
+from room_editor.model.palette import NamedPalette, Palette
 from room_editor.model.project import (
     GameObject,
+    ImageStatus,
     ObjectGroup,
     ObjectInstance,
     Project,
     Room,
+    RowAssignment,
     StartPosition,
     Teleport,
     TeleportEndpoint,
@@ -219,11 +221,11 @@ class UpdateRoomMetaCommand(Command):
 
 
 class SetRoomRowGroupsCommand(Command):
-    def __init__(self, room: Room, new_row_groups: list[str]) -> None:
-        self.description = f"Update row groups for '{room.name}'"
+    def __init__(self, room: Room, new_row_groups: list[RowAssignment | str]) -> None:
+        self.description = f"Update row groups/palettes for '{room.name}'"
         self._room = room
         self._old_row_groups = list(room.row_groups)
-        self._new_row_groups = list(new_row_groups)
+        self._new_row_groups = [RowAssignment.coerce(item) for item in new_row_groups]
 
     def execute(self) -> None:
         self._room.row_groups = list(self._new_row_groups)
@@ -408,10 +410,12 @@ class AddGroupCommand(Command):
 
     def execute(self) -> None:
         self._project.object_groups.append(self._group)
+        self._project.rebuild_glyph_tables()
 
     def undo(self) -> None:
         if self._group in self._project.object_groups:
             self._project.object_groups.remove(self._group)
+        self._project.rebuild_glyph_tables()
 
 
 class DeleteGroupCommand(Command):
@@ -420,15 +424,17 @@ class DeleteGroupCommand(Command):
         project: Project,
         group_name: str,
         fallback_group: str = "",
+        fallback_palette: str = "",
     ) -> None:
         self.description = f"Delete group '{group_name}'"
         self._project = project
         self._group_name = group_name
         self._fallback_group = fallback_group
+        self._fallback_palette = fallback_palette
         self._removed_group: ObjectGroup | None = None
         self._removed_index: int = -1
         self._old_object_groups: dict[int, str] = {}
-        self._old_room_rows: dict[int, list[str]] = {}
+        self._old_room_rows: dict[int, list[RowAssignment]] = {}
 
     def execute(self) -> None:
         for idx, g in enumerate(self._project.object_groups):
@@ -437,6 +443,13 @@ class DeleteGroupCommand(Command):
                 self._removed_index = idx
                 self._project.object_groups.pop(idx)
                 break
+        fb_pal = self._fallback_palette
+        if not fb_pal and self._fallback_group:
+            fb_grp = self._project.get_group(self._fallback_group)
+            if fb_grp is not None:
+                fb_pal = fb_grp.default_palette_name
+        fallback_entry = RowAssignment(self._fallback_group, fb_pal)
+
         self._old_object_groups = {}
         for obj in self._project.objects:
             if obj.group == self._group_name:
@@ -444,12 +457,13 @@ class DeleteGroupCommand(Command):
                 obj.group = self._fallback_group
         self._old_room_rows = {}
         for room in self._project.rooms:
-            if self._group_name in room.row_groups:
+            if any(ra.group == self._group_name for ra in room.row_groups):
                 self._old_room_rows[room.id] = list(room.row_groups)
                 room.row_groups = [
-                    self._fallback_group if rg == self._group_name else rg
-                    for rg in room.row_groups
+                    fallback_entry if ra.group == self._group_name else ra
+                    for ra in room.row_groups
                 ]
+        self._project.rebuild_glyph_tables()
 
     def undo(self) -> None:
         if self._removed_group is not None and self._removed_group not in self._project.object_groups:
@@ -461,6 +475,7 @@ class DeleteGroupCommand(Command):
         for room in self._project.rooms:
             if room.id in self._old_room_rows:
                 room.row_groups = list(self._old_room_rows[room.id])
+        self._project.rebuild_glyph_tables()
 
 
 class UpdateGroupCommand(Command):
@@ -470,22 +485,51 @@ class UpdateGroupCommand(Command):
         group: ObjectGroup,
         *,
         name: str | None = None,
-        charset_path: str | None = None,
-        charset: CharsetData | None = None,
-        update_charset: bool = False,
-        palette: Palette | None = None,
+        image_path: str | None = None,
+        image: IndexedImage | None = None,
+        update_image: bool = False,
+        image_status: ImageStatus | None = None,
+        image_error: str | None = None,
+        pixel_mapping: tuple[int, int, int, int] | None = None,
+        palettes: list[NamedPalette] | None = None,
     ) -> None:
         self.description = f"Update group '{group.name}'"
         self._project = project
         self._group = group
         self._old_name = group.name
         self._new_name = name if name is not None else group.name
-        self._old_charset_path = group.charset_path
-        self._new_charset_path = charset_path if charset_path is not None else group.charset_path
-        self._old_charset = group.charset
-        self._new_charset = charset if update_charset else group.charset
-        self._old_palette = group.palette.copy()
-        self._new_palette = palette.copy() if palette is not None else group.palette.copy()
+        self._old_image_path = group.image_path
+        self._new_image_path = image_path if image_path is not None else group.image_path
+        self._old_image = group.image
+        self._new_image = image if update_image else group.image
+        self._old_image_status: ImageStatus = group.image_status
+        if update_image:
+            if image is not None:
+                self._new_image_status: ImageStatus = "ok"
+            elif image_status is not None:
+                self._new_image_status = image_status
+            else:
+                self._new_image_status = "none"
+        else:
+            self._new_image_status = (
+                image_status if image_status is not None else group.image_status
+            )
+        self._old_image_error = group.image_error
+        self._new_image_error = (
+            ""
+            if (update_image and image is not None)
+            else (image_error if image_error is not None else group.image_error)
+        )
+        self._old_pixel_mapping = tuple(group.pixel_mapping)
+        self._new_pixel_mapping = (
+            tuple(pixel_mapping) if pixel_mapping is not None else tuple(group.pixel_mapping)
+        )
+        self._old_palettes = [p.copy() for p in group.palettes]
+        self._new_palettes = (
+            [p.copy() for p in palettes]
+            if palettes is not None
+            else [p.copy() for p in group.palettes]
+        )
 
     def _rename_references(self, from_name: str, to_name: str) -> None:
         if from_name == to_name:
@@ -495,22 +539,193 @@ class UpdateGroupCommand(Command):
                 obj.group = to_name
         for room in self._project.rooms:
             room.row_groups = [
-                to_name if rg == from_name else rg for rg in room.row_groups
+                RowAssignment(to_name, ra.palette) if ra.group == from_name else ra
+                for ra in room.row_groups
             ]
 
     def execute(self) -> None:
         self._group.name = self._new_name
-        self._group.charset_path = self._new_charset_path
-        self._group.charset = self._new_charset
-        self._group.palette = self._new_palette.copy()
+        self._group.image_path = self._new_image_path
+        self._group.image = self._new_image
+        self._group.image_status = self._new_image_status
+        self._group.image_error = self._new_image_error
+        self._group.pixel_mapping = self._new_pixel_mapping  # type: ignore[assignment]
+        self._group.palettes = [p.copy() for p in self._new_palettes]
         self._rename_references(self._old_name, self._new_name)
+        self._project.rebuild_glyph_tables()
 
     def undo(self) -> None:
         self._group.name = self._old_name
-        self._group.charset_path = self._old_charset_path
-        self._group.charset = self._old_charset
-        self._group.palette = self._old_palette.copy()
+        self._group.image_path = self._old_image_path
+        self._group.image = self._old_image
+        self._group.image_status = self._old_image_status
+        self._group.image_error = self._old_image_error
+        self._group.pixel_mapping = self._old_pixel_mapping  # type: ignore[assignment]
+        self._group.palettes = [p.copy() for p in self._old_palettes]
         self._rename_references(self._new_name, self._old_name)
+        self._project.rebuild_glyph_tables()
+
+
+class AddGroupPaletteCommand(Command):
+    def __init__(
+        self,
+        group: ObjectGroup,
+        named_palette: NamedPalette,
+        description: str | None = None,
+    ) -> None:
+        self.description = description or f"Add palette '{named_palette.name}' to '{group.name}'"
+        self._group = group
+        self._palette = named_palette.copy()
+
+    def execute(self) -> None:
+        self._group.palettes.append(self._palette.copy())
+
+    def undo(self) -> None:
+        for idx in range(len(self._group.palettes) - 1, -1, -1):
+            if self._group.palettes[idx].name == self._palette.name:
+                self._group.palettes.pop(idx)
+                break
+
+
+class RenameGroupPaletteCommand(Command):
+    def __init__(
+        self,
+        project: Project,
+        group: ObjectGroup,
+        old_name: str,
+        new_name: str,
+    ) -> None:
+        self.description = f"Rename palette '{old_name}' -> '{new_name}'"
+        self._project = project
+        self._group = group
+        self._old_name = old_name
+        self._new_name = new_name
+
+    def _apply_rename(self, from_name: str, to_name: str) -> None:
+        for pal in self._group.palettes:
+            if pal.name == from_name:
+                pal.name = to_name
+                break
+        for room in self._project.rooms:
+            room.row_groups = [
+                RowAssignment(ra.group, to_name)
+                if ra.group == self._group.name and ra.palette == from_name
+                else ra
+                for ra in room.row_groups
+            ]
+
+    def execute(self) -> None:
+        cleaned = self._new_name.strip()
+        if not cleaned:
+            raise ValueError("Palette name cannot be empty.")
+        if cleaned != self._old_name and self._group.get_named_palette(cleaned) is not None:
+            raise ValueError(f"Duplicate palette name '{cleaned}' in group '{self._group.name}'.")
+        self._new_name = cleaned
+        self._apply_rename(self._old_name, self._new_name)
+
+    def undo(self) -> None:
+        self._apply_rename(self._new_name, self._old_name)
+
+
+class DeleteGroupPaletteCommand(Command):
+    def __init__(
+        self,
+        project: Project,
+        group: ObjectGroup,
+        palette_name: str,
+    ) -> None:
+        self.description = f"Delete palette '{palette_name}' from '{group.name}'"
+        self._project = project
+        self._group = group
+        self._palette_name = palette_name
+        self._removed_palette: NamedPalette | None = None
+        self._removed_index: int = -1
+        self._old_room_rows: dict[int, list[RowAssignment]] = {}
+
+    def execute(self) -> None:
+        if len(self._group.palettes) <= 1:
+            raise ValueError("Cannot delete the last palette of an object group.")
+        for idx, pal in enumerate(self._group.palettes):
+            if pal.name == self._palette_name:
+                self._removed_palette = pal.copy()
+                self._removed_index = idx
+                self._group.palettes.pop(idx)
+                break
+        if self._removed_palette is None:
+            return
+        fallback_pal = self._group.default_palette_name
+        self._old_room_rows = {}
+        for room in self._project.rooms:
+            if any(
+                ra.group == self._group.name and ra.palette == self._palette_name
+                for ra in room.row_groups
+            ):
+                self._old_room_rows[room.id] = list(room.row_groups)
+                room.row_groups = [
+                    RowAssignment(self._group.name, fallback_pal)
+                    if ra.group == self._group.name and ra.palette == self._palette_name
+                    else ra
+                    for ra in room.row_groups
+                ]
+
+    def undo(self) -> None:
+        if self._removed_palette is not None:
+            idx = max(0, min(self._removed_index, len(self._group.palettes)))
+            self._group.palettes.insert(idx, self._removed_palette.copy())
+        for room in self._project.rooms:
+            if room.id in self._old_room_rows:
+                room.row_groups = list(self._old_room_rows[room.id])
+
+
+class ReorderGroupPaletteCommand(Command):
+    def __init__(self, group: ObjectGroup, from_index: int, to_index: int) -> None:
+        self.description = f"Reorder palettes in '{group.name}'"
+        self._group = group
+        self._from_index = int(from_index)
+        self._to_index = int(to_index)
+
+    def execute(self) -> None:
+        if (
+            0 <= self._from_index < len(self._group.palettes)
+            and 0 <= self._to_index < len(self._group.palettes)
+            and self._from_index != self._to_index
+        ):
+            item = self._group.palettes.pop(self._from_index)
+            self._group.palettes.insert(self._to_index, item)
+
+    def undo(self) -> None:
+        if (
+            0 <= self._from_index < len(self._group.palettes)
+            and 0 <= self._to_index < len(self._group.palettes)
+            and self._from_index != self._to_index
+        ):
+            item = self._group.palettes.pop(self._to_index)
+            self._group.palettes.insert(self._from_index, item)
+
+
+class UpdateGroupPaletteColorsCommand(Command):
+    def __init__(
+        self,
+        group: ObjectGroup,
+        palette_name: str,
+        new_colors: Palette,
+    ) -> None:
+        self.description = f"Edit palette '{palette_name}' in '{group.name}'"
+        self._group = group
+        self._palette_name = palette_name
+        np = group.get_named_palette(palette_name)
+        self._old_colors = np.colors.copy() if np is not None else Palette()
+        self._new_colors = new_colors.copy()
+
+    def execute(self) -> None:
+        np = self._group.get_named_palette(self._palette_name)
+        if np is not None:
+            np.colors = self._new_colors.copy()
+
+    def undo(self) -> None:
+        np = self._group.get_named_palette(self._palette_name)
+        if np is not None:
+            np.colors = self._old_colors.copy()
 
 
 # ---------------------------------------------------------------------------
@@ -526,10 +741,12 @@ class AddObjectCommand(Command):
 
     def execute(self) -> None:
         self._project.objects.append(self._obj)
+        self._project.rebuild_glyph_tables()
 
     def undo(self) -> None:
         if self._obj in self._project.objects:
             self._project.objects.remove(self._obj)
+        self._project.rebuild_glyph_tables()
 
 
 class DeleteObjectCommand(Command):
@@ -555,6 +772,7 @@ class DeleteObjectCommand(Command):
                 room.instances = [
                     inst for inst in room.instances if inst.object_id != self._obj_id
                 ]
+        self._project.rebuild_glyph_tables()
 
     def undo(self) -> None:
         if self._removed_obj is not None and self._removed_obj not in self._project.objects:
@@ -563,6 +781,7 @@ class DeleteObjectCommand(Command):
         for room in self._project.rooms:
             if room.id in self._old_room_instances:
                 room.instances = [copy.deepcopy(i) for i in self._old_room_instances[room.id]]
+        self._project.rebuild_glyph_tables()
 
 
 class UpdateObjectCommand(Command):
@@ -576,9 +795,8 @@ class UpdateObjectCommand(Command):
         group: str | None = None,
         tags: list[str] | None = None,
         non_blockable: bool | None = None,
-        w: int | None = None,
-        h: int | None = None,
-        chars: list[list[int]] | None = None,
+        colpf3: bool | None = None,
+        region: StampRegion | None = None,
     ) -> None:
         self.description = f"Update object '{obj.name}'"
         self._project = project
@@ -589,16 +807,8 @@ class UpdateObjectCommand(Command):
             obj.group,
             list(obj.tags),
             obj.non_blockable,
-            obj.w,
-            obj.h,
-            [list(row) for row in obj.chars],
-        )
-        new_w = obj.w if w is None else int(w)
-        new_h = obj.h if h is None else int(h)
-        new_chars = (
-            [list(row) for row in obj.chars]
-            if chars is None
-            else [list(row) for row in chars]
+            obj.colpf3,
+            obj.region,
         )
         self._new_state = (
             obj.id if id is None else int(id),
@@ -606,30 +816,29 @@ class UpdateObjectCommand(Command):
             obj.group if group is None else group,
             list(obj.tags) if tags is None else list(tags),
             obj.non_blockable if non_blockable is None else bool(non_blockable),
-            new_w,
-            new_h,
-            new_chars,
+            obj.colpf3 if colpf3 is None else bool(colpf3),
+            obj.region if region is None else region,
         )
 
     def _apply(
         self,
-        state: tuple[int, str, str, list[str], bool, int, int, list[list[int]]],
+        state: tuple[int, str, str, list[str], bool, bool, StampRegion],
         prev_id: int,
     ) -> None:
-        nid, nname, ngroup, ntags, nnb, nw, nh, nchars = state
+        nid, nname, ngroup, ntags, nnb, ncolpf3, nregion = state
         self._obj.id = nid
         self._obj.name = nname
         self._obj.group = ngroup
         self._obj.tags = list(ntags)
         self._obj.non_blockable = nnb
-        self._obj.w = nw
-        self._obj.h = nh
-        self._obj.chars = [list(row) for row in nchars]
+        self._obj.colpf3 = ncolpf3
+        self._obj.region = nregion
         if prev_id != nid:
             for room in self._project.rooms:
                 for inst in room.instances:
                     if inst.object_id == prev_id:
                         inst.object_id = nid
+        self._project.rebuild_glyph_tables()
 
     def execute(self) -> None:
         self._apply(self._new_state, self._old_state[0])

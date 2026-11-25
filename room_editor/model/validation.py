@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from room_editor.model.glyphs import MAX_GLYPHS_PER_GROUP, is_valid_pixel_mapping
 from room_editor.model.graph import (
     compute_edge_passages,
     compute_reachable_rooms,
@@ -37,6 +38,8 @@ class ValidationIssue:
 
 def validate_project(project: Project) -> list[ValidationIssue]:
     """Validate project integrity and return errors followed by warnings."""
+    project.resolve_row_assignments()
+    project.rebuild_glyph_tables()
     issues: list[ValidationIssue] = []
 
     # --- Project-level limits ---
@@ -87,12 +90,106 @@ def validate_project(project: Project) -> list[ValidationIssue]:
             seen_group_names.add(grp.name)
             groups_by_name[grp.name] = grp
 
-        if grp.charset is None:
+        if not grp.palettes:
             issues.append(
                 ValidationIssue(
                     severity="error",
-                    code="GROUP_NO_CHARSET",
-                    message=f"Object group '{grp.name}' has no loaded 1024-byte charset.",
+                    code="GROUP_NO_PALETTES",
+                    message=f"Object group '{grp.name}' must have at least one palette.",
+                    target_type="group",
+                    target_id=grp.name,
+                )
+            )
+        else:
+            seen_pal_names: set[str] = set()
+            for pal in grp.palettes:
+                if not pal.name.strip():
+                    issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            code="EMPTY_PALETTE_NAME",
+                            message=f"Object group '{grp.name}' has a palette with an empty name.",
+                            target_type="group",
+                            target_id=grp.name,
+                        )
+                    )
+                elif pal.name in seen_pal_names:
+                    issues.append(
+                        ValidationIssue(
+                            severity="error",
+                            code="DUPLICATE_PALETTE_NAME",
+                            message=(
+                                f"Object group '{grp.name}' has duplicate palette name '{pal.name}'."
+                            ),
+                            target_type="group",
+                            target_id=grp.name,
+                        )
+                    )
+                else:
+                    seen_pal_names.add(pal.name)
+
+        if not is_valid_pixel_mapping(grp.pixel_mapping):
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="GROUP_INVALID_PIXEL_MAPPING",
+                    message=(
+                        f"Object group '{grp.name}' has invalid pixel mapping {grp.pixel_mapping!r}; "
+                        "must be a permutation of (0, 1, 2, 3)."
+                    ),
+                    target_type="group",
+                    target_id=grp.name,
+                )
+            )
+
+        if grp.image is None:
+            if grp.image_status == "invalid":
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="GROUP_INVALID_IMAGE",
+                        message=(
+                            f"Object group '{grp.name}' has invalid PNG '{grp.image_path}': "
+                            f"{grp.image_error or 'validation failed'}."
+                        ),
+                        target_type="group",
+                        target_id=grp.name,
+                    )
+                )
+            elif grp.image_status == "missing":
+                issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        code="GROUP_IMAGE_MISSING",
+                        message=(
+                            f"Object group '{grp.name}' PNG file is missing on disk: '{grp.image_path}'."
+                        ),
+                        target_type="group",
+                        target_id=grp.name,
+                    )
+                )
+            else:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="GROUP_NO_IMAGE",
+                        message=f"Object group '{grp.name}' has no PNG image assigned.",
+                        target_type="group",
+                        target_id=grp.name,
+                    )
+                )
+        elif (
+            grp.glyph_analysis is not None
+            and grp.glyph_analysis.total_unique_needed > MAX_GLYPHS_PER_GROUP
+        ):
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="GROUP_GLYPH_LIMIT_EXCEEDED",
+                    message=(
+                        f"Object group '{grp.name}' requires {grp.glyph_analysis.total_unique_needed} "
+                        f"unique non-empty glyphs; maximum is {MAX_GLYPHS_PER_GROUP}."
+                    ),
                     target_type="group",
                     target_id=grp.name,
                 )
@@ -164,7 +261,8 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                 )
             )
 
-        if not obj.group or obj.group not in groups_by_name:
+        grp = groups_by_name.get(obj.group)
+        if grp is None:
             issues.append(
                 ValidationIssue(
                     severity="error",
@@ -174,6 +272,58 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                     target_id=obj.id,
                 )
             )
+        elif grp.image is not None and grp.glyph_analysis is not None:
+            analysis = grp.glyph_analysis
+            if obj.id in analysis.invalid_region_object_ids and 1 <= obj.cell_count <= MAX_OBJECT_CELLS:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="OBJECT_REGION_OUT_OF_IMAGE",
+                        message=(
+                            f"Object '{obj.name}' (ID {obj.id}) region ({obj.region.x}, {obj.region.y}) "
+                            f"{obj.w}x{obj.h} lies outside group '{grp.name}' image "
+                            f"({grp.image.glyph_cols}x{grp.image.glyph_rows} glyphs)."
+                        ),
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
+            if obj.id in analysis.empty_object_ids:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="OBJECT_EMPTY",
+                        message=f"Object '{obj.name}' (ID {obj.id}) contains only empty (00) glyphs.",
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
+            if obj.id in analysis.overflow_object_ids:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="OBJECT_EXCEEDS_GLYPH_LIMIT",
+                        message=(
+                            f"Object '{obj.name}' (ID {obj.id}) exceeds the {MAX_GLYPHS_PER_GROUP}-glyph "
+                            f"limit for group '{grp.name}'."
+                        ),
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
+            if obj.id in analysis.colpf3_no_effect_object_ids:
+                issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        code="OBJECT_COLPF3_NO_EFFECT",
+                        message=(
+                            f"Object '{obj.name}' (ID {obj.id}) has COLPF3 enabled, "
+                            "but none of its glyphs use pixel value 11 (COLPF2/COLPF3)."
+                        ),
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
 
     # --- Rooms ---
     seen_room_ids: set[int] = set()
@@ -182,6 +332,7 @@ def validate_project(project: Project) -> list[ValidationIssue]:
     rooms_by_id = {}
     used_object_ids: set[int] = set()
     used_group_names: set[str] = {o.group for o in project.objects if o.group in groups_by_name}
+    used_palettes: set[tuple[str, str]] = set()
 
     for room in project.rooms:
         if not (1 <= room.id <= MAX_ROOMS):
@@ -247,13 +398,21 @@ def validate_project(project: Project) -> list[ValidationIssue]:
         else:
             seen_room_pos[room.pos] = room.id
 
-        # Row groups
+        # Row groups and row palettes
         invalid_rows: list[int] = []
-        for r_idx, grp_name in enumerate(room.row_groups):
-            if grp_name not in groups_by_name:
+        invalid_pal_rows: list[int] = []
+        for r_idx, ra in enumerate(room.row_groups):
+            row_grp = groups_by_name.get(ra.group)
+            if row_grp is None:
                 invalid_rows.append(r_idx)
             else:
-                used_group_names.add(grp_name)
+                used_group_names.add(ra.group)
+                if row_grp.palettes:
+                    pal_name = ra.palette if ra.palette else row_grp.default_palette_name
+                    if row_grp.get_named_palette(pal_name) is None:
+                        invalid_pal_rows.append(r_idx)
+                    else:
+                        used_palettes.add((ra.group, pal_name))
         if invalid_rows:
             issues.append(
                 ValidationIssue(
@@ -266,6 +425,20 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                     target_type="room",
                     target_id=room.id,
                     y=invalid_rows[0],
+                )
+            )
+        if invalid_pal_rows:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="ROOM_INVALID_ROW_PALETTE",
+                    message=(
+                        f"Room '{room.name}' (ID {room.id}) references unknown palette on row(s) "
+                        f"{invalid_pal_rows[0]}..{invalid_pal_rows[-1]}."
+                    ),
+                    target_type="room",
+                    target_id=room.id,
+                    y=invalid_pal_rows[0],
                 )
             )
 
@@ -336,11 +509,11 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                         else:
                             occupied_blockable[(cx, cy)] = obj.id
 
-                    row_grp = room.row_groups[cy]
+                    row_ra = room.row_groups[cy]
                     if (
-                        row_grp in groups_by_name
+                        row_ra.group in groups_by_name
                         and obj.group in groups_by_name
-                        and row_grp != obj.group
+                        and row_ra.group != obj.group
                         and (obj.id, inst.x, cy) not in mismatch_reported
                     ):
                         mismatch_reported.add((obj.id, inst.x, cy))
@@ -350,7 +523,7 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                                 code="OBJECT_ROW_GROUP_MISMATCH",
                                 message=(
                                     f"Object '{obj.name}' (group '{obj.group}') in room '{room.name}' "
-                                    f"at row {cy} uses row group '{row_grp}'."
+                                    f"at row {cy} uses row group '{row_ra.group}'."
                                 ),
                                 target_type="room",
                                 target_id=room.id,
@@ -498,7 +671,7 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                     )
                 )
 
-    # --- Warnings: unused objects and groups ---
+    # --- Warnings: unused objects, groups, and palettes ---
     for obj in project.objects:
         if obj.id not in used_object_ids:
             issues.append(
@@ -522,7 +695,19 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                     target_id=grp.name,
                 )
             )
+        for pal in grp.palettes:
+            if pal.name.strip() and (grp.name, pal.name) not in used_palettes:
+                issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        code="UNUSED_PALETTE",
+                        message=(
+                            f"Palette '{pal.name}' in group '{grp.name}' is not assigned to any room row."
+                        ),
+                        target_type="group",
+                        target_id=grp.name,
+                    )
+                )
 
-    # Sort errors before warnings for consistent presentation
     issues.sort(key=lambda i: 0 if i.severity == "error" else 1)
     return issues

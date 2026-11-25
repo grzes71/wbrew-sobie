@@ -1,14 +1,14 @@
-"""Atari PAL palette model and RGB lookup table."""
+"""Atari PAL palette model, named group palettes, and RGB lookup table."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-
+DEFAULT_PALETTE_NAME = "default"
 DEFAULT_PAL_PALETTE_PATH = Path(__file__).resolve().parent.parent / "data" / "pal_palette.json"
 
 
@@ -80,6 +80,40 @@ class Palette:
         if slot == 4:
             return self.colpf3
         raise ValueError(f"Invalid palette slot {slot}; expected 0..4.")
+
+
+@dataclass
+class NamedPalette:
+    """A named ANTIC 4 palette entry belonging to an ObjectGroup."""
+
+    name: str = DEFAULT_PALETTE_NAME
+    colors: Palette = field(default_factory=Palette)
+
+    def __post_init__(self) -> None:
+        self.name = str(self.name)
+        if isinstance(self.colors, dict):
+            self.colors = Palette.from_dict(self.colors)
+
+    def copy(self) -> NamedPalette:
+        """Return an independent copy of this NamedPalette."""
+        return NamedPalette(name=self.name, colors=self.colors.copy())
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a flat dict with name followed by colbk..colpf3."""
+        return {
+            "name": self.name,
+            **self.colors.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> NamedPalette:
+        """Construct a NamedPalette from a mapping."""
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected palette mapping, got {data!r}.")
+        return cls(
+            name=str(data.get("name", DEFAULT_PALETTE_NAME)),
+            colors=Palette.from_dict(data),
+        )
 
 
 class PalPaletteTable:
