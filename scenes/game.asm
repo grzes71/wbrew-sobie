@@ -30,13 +30,17 @@
     sta GRAFP3
     sta GRAFM
 
-    ; 3. Render START_ROOM into SCREEN_VRAM ($3000), build Display List, and init animations
+    ; 3. Render START_ROOM into SCREEN_VRAM ($3000), build Display List,
+    ;    init animations, and place Hero Player 0 at (START_X, START_Y)
     ldx #START_ROOM
     jsr room_draw
     ldx #START_ROOM
     jsr room_setup_display
     ldx #START_ROOM
     jsr room_anim_init
+    ldx #START_X
+    ldy #START_Y
+    jsr hero_init
 
     ; 4. Atomically install room Display List, DLI handler, and Deferred VBI vector
     lda #$00
@@ -59,8 +63,8 @@
     lda #>game_vbi_deferred
     sta VVBLKD+1
 
-    ; 5. Re-enable normal playfield DMA ($22) via OS shadow (and direct DMACTL)
-    lda #$22
+    ; 5. Re-enable normal playfield + single-line Players DMA ($3A)
+    lda #GAME_DMACTL
     sta SDMCTL
     sta DMACTL
 
@@ -82,7 +86,12 @@
     lda #0
     sta zp_dli_idx
 
-    ; Wait for new FIRE press:
+    ; Advance hero physics, fall animation, landing, and bottom-edge check
+    jsr hero_update
+    lda zp_hero_fell_out
+    bne @failure
+
+    ; Allow manual FIRE exit for testing/existing state flow:
     ;   - Joy UP held (bit 0 of zp_joy_curr == 0) -> STATE_GAME_OVER_SUCCESS
     ;   - Otherwise -> STATE_GAME_OVER_FAILURE
     lda zp_fire_pressed
@@ -92,12 +101,14 @@
     and #$01
     beq @victory
 
+@failure
     lda #STATE_GAME_OVER_FAILURE
     bne @leave_game
 @victory
     lda #STATE_GAME_OVER_SUCCESS
 @leave_game
     sta zp_next_state
+    jsr hero_pmg_disable
     lda #$00
     sta zp_anim_active
     sta zp_anim_pending

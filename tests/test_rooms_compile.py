@@ -1938,3 +1938,68 @@ def test_frame_groups_compiler_both_forms_playback_dedup_and_validation(tmp_path
     w_codes = {w.code for w in res_w.report.warnings}
     assert {"ANIM_GROUP_REPEAT_ONE", "ANIM_GROUPS_NOT_ANIMATED"}.issubset(w_codes)
 
+
+def test_hero_start_warnings(tmp_path: Path) -> None:
+    """Verify START_FOOTPRINT_BLOCKED and START_AT_BOTTOM_ROW warnings cleanly distinguish blockable/non-blockable."""
+    proj_dir = tmp_path / "start_warn"
+    proj_dir.mkdir()
+    _write_png(
+        proj_dir / "g.png",
+        4,
+        1,
+        lambda gx, _gy: [[0, 0, 0, 0] for _ in range(8)] if gx == 0 else _unique_tile(gx),
+    )
+    doc: dict[str, Any] = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "g",
+                "image": "g.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+            }
+        ],
+        "objects": [
+            {"id": 1, "name": "solid", "group": "g", "tags": [], "non-blockable": False, "colpf3": False, "animation_speed": 0, "frames": [{"x": 1, "y": 0, "w": 1, "h": 1}]},
+            {"id": 2, "name": "decor", "group": "g", "tags": [], "non-blockable": True, "colpf3": False, "animation_speed": 0, "frames": [{"x": 2, "y": 0, "w": 1, "h": 1}]},
+            {"id": 3, "name": "half_empty", "group": "g", "tags": [], "non-blockable": False, "colpf3": False, "animation_speed": 0, "frames": [{"x": 0, "y": 0, "w": 2, "h": 1}]},
+        ],
+        "rooms": [
+            {
+                "id": 1,
+                "name": "R",
+                "pos": [0, 0],
+                "row_groups": ["g"],
+                "placed": [
+                    {"object": 2, "x": 3, "y": 4},  # non-blockable under start -> no warning
+                    {"object": 3, "x": 4, "y": 4},  # code 0 transparent at x=4, solid at x=5 -> no warning for start at x=3
+                    {"object": 1, "x": 10, "y": 4}, # blockable at (10,4)
+                ],
+            }
+        ],
+        "teleports": [],
+        "start": {"room": 1, "x": 3, "y": 4},
+    }
+    yf = proj_dir / "rooms.yaml"
+    yf.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    res_ok = compile_rooms(yf, out_dir=tmp_path / "ok_out")
+    codes_ok = {w.code for w in res_ok.report.warnings}
+    assert "START_FOOTPRINT_BLOCKED" not in codes_ok
+    assert "START_AT_BOTTOM_ROW" not in codes_ok
+
+    # Overlapping blockable at right column of footprint (start_x=9 -> footprint cols 9..10 hits x=10)
+    doc_blk = yaml.safe_load(yf.read_text(encoding="utf-8"))
+    doc_blk["start"] = {"room": 1, "x": 9, "y": 4}
+    yf_blk = proj_dir / "blk.yaml"
+    yf_blk.write_text(yaml.safe_dump(doc_blk, sort_keys=False), encoding="utf-8")
+    res_blk = compile_rooms(yf_blk, out_dir=tmp_path / "blk_out")
+    assert "START_FOOTPRINT_BLOCKED" in {w.code for w in res_blk.report.warnings}
+
+    # Start at bottom row y=23
+    doc_bot = yaml.safe_load(yf.read_text(encoding="utf-8"))
+    doc_bot["start"] = {"room": 1, "x": 3, "y": 23}
+    yf_bot = proj_dir / "bot.yaml"
+    yf_bot.write_text(yaml.safe_dump(doc_bot, sort_keys=False), encoding="utf-8")
+    res_bot = compile_rooms(yf_bot, out_dir=tmp_path / "bot_out")
+    assert "START_AT_BOTTOM_ROW" in {w.code for w in res_bot.report.warnings}
+

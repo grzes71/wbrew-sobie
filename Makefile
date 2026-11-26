@@ -41,8 +41,13 @@ INTRO_TXT           := texts/intro.txt
 INTRO_COMPILER      := scripts/compile_intro.py
 INTRO_DATA_ASM      := $(GEN_DIR)/intro_text.asm
 
+HERO_SPRITE_JSON    := sprites/project.sprite.json
+HERO_COMPILER       := scripts/compile_hero_sprites.py
+HERO_ASM_FILES      := $(GEN_DIR)/hero_defs.asm \
+                       $(GEN_DIR)/hero_sprites.asm
+
 ASM_SRCS        := main.asm hardware.asm colors.asm zeropage.asm \
-                   lib/rle.asm lib/pmg.asm lib/player.asm engine/input.asm engine/dli.asm engine/room.asm engine/anim.asm \
+                   lib/rle.asm lib/pmg.asm lib/player.asm engine/input.asm engine/dli.asm engine/room.asm engine/anim.asm engine/hero.asm \
                    scenes/title.asm scenes/intro.asm scenes/game.asm scenes/gameover.asm
 
 .PHONY: all assets data audio xex tests test check_memory run clean
@@ -61,7 +66,7 @@ $(TITLE_JSON): $(TITLE_PNG) $(GAME_FONT) scripts/png_to_charset.py
 # ------------------------------------------------------------------------------
 # 2. Data compilation (JSON -> RLE ASM; YAML + PNGs -> Room & Charset ASM)
 # ------------------------------------------------------------------------------
-data: $(TITLE_DATA_ASM) $(ROOMS_ASM_FILES) $(INTRO_DATA_ASM)
+data: $(TITLE_DATA_ASM) $(ROOMS_ASM_FILES) $(INTRO_DATA_ASM) $(HERO_ASM_FILES)
 
 $(TITLE_DATA_ASM): $(TITLE_JSON) scripts/compile_title_screen.py
 	@$(MKDIR) $(GEN_DIR)
@@ -74,6 +79,10 @@ $(ROOMS_ASM_FILES) &: $(ROOMS_YAML) $(ROOMS_PNGS) $(ROOMS_COMPILER)
 $(INTRO_DATA_ASM): $(INTRO_TXT) $(INTRO_COMPILER)
 	@$(MKDIR) $(GEN_DIR)
 	$(PYTHON) $(INTRO_COMPILER) --input $(INTRO_TXT) --output $(INTRO_DATA_ASM)
+
+$(HERO_ASM_FILES) &: $(HERO_SPRITE_JSON) $(HERO_COMPILER)
+	@$(MKDIR) $(GEN_DIR)
+	$(PYTHON) $(HERO_COMPILER) --input $(HERO_SPRITE_JSON) --out-dir $(GEN_DIR)
 
 # ------------------------------------------------------------------------------
 # 3. Audio compilation (Music DSL + arrangement JSON -> JSON IR -> MADS v2 SoA ASM)
@@ -89,7 +98,7 @@ $(TITLE_MUSIC_JSON) $(TITLE_MUSIC_ASM): $(TITLE_DSL) $(TITLE_ARRANGEMENT) script
 # ------------------------------------------------------------------------------
 xex: $(TARGET)
 
-$(TARGET): $(ASM_SRCS) $(TITLE_DATA_ASM) $(TITLE_MUSIC_ASM) $(ROOMS_ASM_FILES) $(INTRO_DATA_ASM)
+$(TARGET): $(ASM_SRCS) $(TITLE_DATA_ASM) $(TITLE_MUSIC_ASM) $(ROOMS_ASM_FILES) $(INTRO_DATA_ASM) $(HERO_ASM_FILES)
 	@$(MKDIR) $(GEN_DIR)
 	$(MADS) main.asm -o:$(TARGET) -l:$(GEN_DIR)/main.lst -t:$(GEN_DIR)/main.lab
 

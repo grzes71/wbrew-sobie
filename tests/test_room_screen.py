@@ -310,6 +310,9 @@ def test_room_dli_handler_switches_styles_and_preserves_registers() -> None:
 
     run_subroutine(mpu, labels["GAME_ENTER"])
 
+    assert raw_mem[0x02C0] == labels["HERO_COLOR"]  # PCOLR0
+    assert raw_mem[0xD012] == labels["HERO_COLOR"]  # COLPM0
+
     dli_count = raw_mem[labels["ROOM_DLI_COUNT"]]
     if dli_count > 0:
         assert raw_mem[NMIEN] == 0xC0
@@ -361,9 +364,10 @@ def test_room_dli_handler_switches_styles_and_preserves_registers() -> None:
         assert raw_mem[COLPF1] == raw_mem[colpf1_tbl + target_style]
         assert raw_mem[COLPF2] == raw_mem[colpf2_tbl + target_style]
         assert raw_mem[COLPF3] == raw_mem[colpf3_tbl + target_style]
-        # OS shadows stay Row 0
+        # OS shadows stay Row 0 and Player 0 color is untouched by room DLIs
         assert raw_mem[CHBAS] == raw_mem[chbase_tbl + row0_style]
         assert raw_mem[COLOR4] == raw_mem[colbk_tbl + row0_style]
+        assert raw_mem[0xD012] == labels["HERO_COLOR"]
         assert mpu.a == 0xAA
         assert mpu.x == 0x55
         assert mpu.y == 0x33
@@ -414,8 +418,10 @@ def test_initial_room_state_flow_and_static_screen_until_fire() -> None:
     assert (om[VVBLKD] | (om[VVBLKD + 1] << 8)) == labels["GAME_VBI_DEFERRED"]
     expected_anim_active = min(1, len({inst.object_id for inst in start_room.instances if proj.get_object(inst.object_id) and proj.get_object(inst.object_id).is_animated}))
     assert (om[labels["ZP_ANIM_ACTIVE"]] != 0) == (expected_anim_active != 0)
-    assert om[SDMCTL] == 0x22
-    assert om[GRACTL] == 0x00
+    assert om[SDMCTL] == labels["GAME_DMACTL"]
+    assert om[GRACTL] == labels["GAME_GRACTL"]
+    assert om[0xD000] == labels["PLAYFIELD_LEFT_CC"] + 4 * labels["START_X"]
+    assert om[0xD012] == labels["HERO_COLOR"]
     assert list(raw_mem[vram : vram + 960]) == expected_vram
 
     # Track VRAM writes during idle frames in STATE_GAME
@@ -432,10 +438,13 @@ def test_initial_room_state_flow_and_static_screen_until_fire() -> None:
         assert om[labels["ZP_CURRENT_STATE"]] == labels["STATE_GAME"]
     assert vram_writes == [], "game_update must not redraw SCREEN_VRAM every frame"
 
-    # 5. Press FIRE -> single transition to STATE_GAME_OVER_FAILURE; holding FIRE stays there
+    # 5. Press FIRE -> single transition to STATE_GAME_OVER_FAILURE; holding FIRE stays there & PMG disabled
     om[TRIG0] = 0x00
     run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
     assert om[labels["ZP_CURRENT_STATE"]] == labels["STATE_GAME_OVER_FAILURE"]
+    assert om[GRACTL] == 0x00
+    assert om[0xD000] == 0x00
+    assert om[SDMCTL] == 0x22
     assert om[labels["ZP_ANIM_ACTIVE"]] == 0
     assert (om[VVBLKD] | (om[VVBLKD + 1] << 8)) == labels["XITVBV"]
     for _ in range(3):

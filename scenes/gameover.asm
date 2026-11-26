@@ -8,6 +8,10 @@
     lda #0
     sta SDMCTL
     sta DMACTL
+    sta GRACTL
+    sta GPRIOR
+    sta PRIOR
+    sta HPOSP0
     sta zp_anim_active
     sta zp_anim_pending
 

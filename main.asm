@@ -7,6 +7,7 @@
     icl 'colors.asm'
     icl 'zeropage.asm'
     icl 'gen/rooms_defs.asm'
+    icl 'gen/hero_defs.asm'
 
 ; --- Game State Machine Constants ---
 STATE_TITLE_SCREEN      = 0
@@ -59,11 +60,15 @@ ANIM_RAM_END            = anim_copy_count + 1
     .else
 ANIM_RAM_END            = anim_slot_cur + ANIM_SLOT_CAP
     .endif
-    .if ANIM_RAM_END > $3800
-        .error "Animation state RAM overflows into PMG_BASE ($3800)!"
+room_block_map          = $3700                             ; 120 B ($3700..$3777): 40x24 cell blocking bitmap
+    .if ANIM_RAM_END > room_block_map
+        .error "Animation state RAM overflows into room_block_map ($3700)!"
     .endif
 
 PMG_BASE                = $3800     ; 2 KB PMG single-line buffer ($3800..$3FFF)
+    .if (PMG_BASE & $07FF) <> 0
+        .error "PMG_BASE must be 2 KB aligned for single-line resolution!"
+    .endif
 PMG_MISSILES            = PMG_BASE + $300 ; Missiles buffer ($3B00..$3BFF)
 PMG_P0                  = PMG_BASE + $400 ; Player 0 buffer ($3C00..$3CFF)
 PMG_P1                  = PMG_BASE + $500 ; Player 1 buffer ($3D00..$3DFF)
@@ -185,17 +190,16 @@ state_update_lo
 state_update_hi
     dta >title_update, >intro_update, >game_update, >gameover_failure_update, >gameover_success_update
 
-; --- Core Libraries, Engine & Scenes ---
+; --- Core Libraries, Title Engine & Title Scene ($2000) ---
     icl 'lib/rle.asm'
     icl 'lib/pmg.asm'
     icl 'engine/input.asm'
     icl 'engine/dli.asm'
-    icl 'engine/room.asm'
-    icl 'engine/anim.asm'
     icl 'scenes/title.asm'
-    icl 'scenes/intro.asm'
-    icl 'scenes/game.asm'
-    icl 'scenes/gameover.asm'
+
+    .if * >= SCREEN_VRAM
+        .error "$2000 segment overflows into SCREEN_VRAM ($3000)!"
+    .endif
 
 ; --- Auto-generated Title Screen Data, Display Lists ($3400) & Charsets ($4000) ---
     icl 'gen/title_screen_data.asm'
@@ -205,7 +209,7 @@ state_update_hi
     icl 'lib/player.asm'
     icl 'gen/title_music.asm'
 
-; --- Room Charsets (1 KB aligned at $6000) & Compiled Room / Intro Data ---
+; --- Room Charsets (1 KB aligned at $6000), Compiled Data & Gameplay Engine ---
 ROOMS_ALIGN_CHARSETS = 1
     org $6000
     icl 'gen/charsets.asm'
@@ -215,6 +219,13 @@ ROOMS_ALIGN_CHARSETS = 1
     icl 'gen/teleports.asm'
     icl 'gen/animations.asm'
     icl 'gen/intro_text.asm'
+    icl 'gen/hero_sprites.asm'
+    icl 'engine/room.asm'
+    icl 'engine/anim.asm'
+    icl 'engine/hero.asm'
+    icl 'scenes/intro.asm'
+    icl 'scenes/game.asm'
+    icl 'scenes/gameover.asm'
 
 ; --- DOS Binary Run Address ---
     run main

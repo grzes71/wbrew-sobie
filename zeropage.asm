@@ -28,10 +28,26 @@ zp_pmg_margin       = $95   ; Margines (odstęp) w liniach pomiędzy znakami dla
 zp_pmg_invert       = $96   ; Flaga inwersji znaku: 0 = normalny, $FF = inwersja (1 bajt)
 zp_p5_wave_phase    = $97   ; Bieżąca faza fali sinusowej dla 5. gracza (1 bajt)
 
+; --- Hero State & Physics ($98-$9F, $AA-$AF, $CF, $DA-$DF) ---
+zp_hero_x           = $98   ; Playfield X in color clocks (0..159; HPOSP0 = x + 48)
+zp_hero_y           = $99   ; PMG single-line Y of hero top (22..231)
+zp_hero_draw_y      = $9A   ; Last drawn PMG Y for partial trail clearing
+zp_hero_state       = $9B   ; 0=STANDING, 1=FALLING, 2=JUMPING, 3=SQUATTING
+zp_hero_facing      = $9C   ; HERO_FACING_RIGHT (0) / HERO_FACING_LEFT (1)
+zp_hero_anim_set    = $9D   ; Current hero sprite set ID (1..8)
+zp_hero_anim_frame  = $9E   ; Current frame index within set (0..count-1)
+zp_hero_anim_timer  = $9F   ; Ticks remaining before next animation frame
+
 ; --- Audio Player Zero Page Base ($A0-$A9) ---
 PLAYER_ZP_BASE      = $A0
+zp_hero_tmp2        = $AA   ; Hero scratch byte (row*5 / fall step / count / bot_row)
+zp_hero_fell_out    = $AB   ; Non-zero when hero top reaches playfield bottom
+zp_hero_jump_idx    = $AC   ; Index into hero_jump_steps (0..HERO_JUMP_STEP_COUNT)
+zp_hero_jump_dir    = $AD   ; Committed jump X dir (0=right, 1=left, $FF=vertical-only)
+zp_hero_cmd         = $AE   ; Decoded joystick command (HERO_CMD_*)
+zp_hero_tmp3        = $AF   ; Hero collision scratch byte (col / cand_x)
 
-; --- Room Renderer & Display Pointers ($B0-$CB) ---
+; --- Room Renderer & Display Pointers ($B0-$CE) ---
 zp_room_inst_obj    = $B0   ; Wskaźnik płaszczyzny obj_id instancji (2 bajty: $B0-$B1)
 zp_room_inst_x      = $B2   ; Wskaźnik płaszczyzny X instancji (2 bajty: $B2-$B3)
 zp_room_inst_yf     = $B4   ; Wskaźnik płaszczyzny y_flag instancji (2 bajty: $B4-$B5)
@@ -53,6 +69,10 @@ zp_room_rep_w_tot   = $C8   ; Całkowita liczba powtórzeń w poziomie rep_w (1 
 zp_room_rep_h_cnt   = $C9   ; Licznik pozostałych powtórzeń w pionie (1 bajt)
 zp_room_row_cnt     = $CA   ; Licznik pozostałych wierszy kopiowanego stempla (1 bajt)
 zp_room_draw_y      = $CB   ; Bieżący wiersz ekranu Y podczas rysowania stempla (1 bajt)
+zp_room_obj_nb      = $CC   ; Flaga non-blockable bieżącego obiektu (0 = blockable)
+zp_room_blk_row     = $CD   ; Offset wiersza w room_block_map (zp_room_draw_y * 5)
+zp_room_col_save    = $CE   ; Zapisany indeks kolumny podczas aktualizacji bitów
+zp_hero_walk_sub    = $CF   ; Grounded walk sub-step countdown (0 = move on next walk frame)
 
 ; --- Intro Screen Typewriter State ($D0-$D9) ---
 zp_intro_src        = $D0   ; Wskaźnik źródłowy wiersza intro_screen_data (2 bajty: $D0-$D1)
@@ -63,6 +83,13 @@ zp_intro_timer      = $D6   ; Licznik klatek opóźnienia kolejnego znaku
 zp_intro_sfx_timer  = $D7   ; Licznik czasu zanikania kliku POKEY (0..2 klatki)
 zp_intro_done       = $D8   ; Flaga zakończenia pisania tekstu (0=pisze, 1=cały tekst)
 zp_intro_wait_rel   = $D9   ; Flaga oczekiwania na puszczenie FIRE po pominięciu intro (0/1)
+
+; --- Hero Engine Pointers & Draw Tracking ($DA-$DF) ---
+zp_hero_fall_idx    = $DA   ; Index into hero_fall_steps table
+zp_hero_dirty       = $DB   ; Non-zero when PMG Player 0 redraw is required
+zp_hero_drawn       = $DC   ; Non-zero when hero sprite is currently drawn in PMG_P0
+zp_hero_ptr         = $DD   ; Pointer to 18-byte hero frame data ($DD-$DE)
+zp_hero_tmp         = $DF   ; Hero scratch byte (row / col_b / clear count)
 
 ; --- Room Animation Engine ($E0-$FD, VBI-safe) ---
 zp_anim_active      = $E0   ; Non-zero while current room has active animated objects

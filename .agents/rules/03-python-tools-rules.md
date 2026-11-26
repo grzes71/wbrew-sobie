@@ -13,6 +13,7 @@ trigger: always_on
 - **Type Hinting:** All functions and methods must have complete Python type hints.
 - **Dependencies:** Keep external dependencies minimal and explicitly documented in `requirements.txt`.
 - **CLI Design:** Scripts should have clean command-line interfaces (using `argparse` or `click`) and return appropriate exit codes (0 for success, non-zero for failure) to integrate seamlessly with `make`.
+- **PySide6 `QListWidget` Multi-Selection:** Under `ExtendedSelection`, call `setCurrentRow(lo)` *before* `clearSelection()` and `item.setSelected(True)`; calling it after resets the selection range.
 
 ## 3. Testing
 - **Emulation:** When writing integration tests, use `py65` to emulate the CPU, load the generated binary, and verify memory states against the expected Python models.

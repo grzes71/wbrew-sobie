@@ -1986,6 +1986,30 @@ def compile_project(
                     f"Rooms '{r.name}' (bottom) and '{nb.name}' (top) have no common free passage cell.",
                 )
 
+    # Hero start footprint & bottom row warnings
+    HERO_COLLISION_WIDTH_CC = 8
+    HERO_SPRITE_HEIGHT = 18
+    start_grid = blocking_grids[start_room]
+    col_left = start_x
+    col_right = min(ROOM_WIDTH - 1, (start_x * 4 + HERO_COLLISION_WIDTH_CC - 1) // 4)
+    row_top = max(0, ((start_y + 1) * 8 - HERO_SPRITE_HEIGHT) // 8)
+    blocked_start_cells = [
+        (r, c)
+        for r in range(row_top, start_y + 1)
+        for c in range(col_left, col_right + 1)
+        if start_grid[r][c]
+    ]
+    if blocked_start_cells:
+        warn(
+            "START_FOOTPRINT_BLOCKED",
+            f"Start footprint overlaps blockable cells in room {start_room} (first at x={blocked_start_cells[0][1]}, y={blocked_start_cells[0][0]}).",
+        )
+    if start_y == ROOM_HEIGHT - 1:
+        warn(
+            "START_AT_BOTTOM_ROW",
+            f"Start position y={start_y} is at the bottom row (nothing below the hero).",
+        )
+
     if strict and warnings:
         joined = "\n".join(f"  [{w.code}] {w.message}" for w in warnings)
         raise RoomCompileError(f"Strict mode: {len(warnings)} warning(s) treated as errors:\n{joined}")
