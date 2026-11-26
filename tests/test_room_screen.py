@@ -42,6 +42,7 @@ PORTA = 0xD300
 CHBASE = 0xD409
 NMIEN = 0xD40E
 VDSLST = 0x0200
+VVBLKD = 0x0224
 SDMCTL = 0x022F
 SDLSTL = 0x0230
 COLOR0 = 0x02C4
@@ -410,6 +411,9 @@ def test_initial_room_state_flow_and_static_screen_until_fire() -> None:
     assert om[labels["CUR_ROOM_ID"]] == labels["START_ROOM"]
     assert (om[SDLSTL] | (om[SDLSTL + 1] << 8)) == labels["ROOM_DLIST"]
     assert (om[VDSLST] | (om[VDSLST + 1] << 8)) == labels["ROOM_DLI_HANDLER"]
+    assert (om[VVBLKD] | (om[VVBLKD + 1] << 8)) == labels["GAME_VBI_DEFERRED"]
+    expected_anim_active = min(1, len({inst.object_id for inst in start_room.instances if proj.get_object(inst.object_id) and proj.get_object(inst.object_id).is_animated}))
+    assert (om[labels["ZP_ANIM_ACTIVE"]] != 0) == (expected_anim_active != 0)
     assert om[SDMCTL] == 0x22
     assert om[GRACTL] == 0x00
     assert list(raw_mem[vram : vram + 960]) == expected_vram
@@ -432,9 +436,13 @@ def test_initial_room_state_flow_and_static_screen_until_fire() -> None:
     om[TRIG0] = 0x00
     run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
     assert om[labels["ZP_CURRENT_STATE"]] == labels["STATE_GAME_OVER_FAILURE"]
+    assert om[labels["ZP_ANIM_ACTIVE"]] == 0
+    assert (om[VVBLKD] | (om[VVBLKD + 1] << 8)) == labels["XITVBV"]
     for _ in range(3):
         run_subroutine(mpu, labels["STATE_MACHINE_STEP"])
         assert om[labels["ZP_CURRENT_STATE"]] == labels["STATE_GAME_OVER_FAILURE"]
+    assert om[labels["ZP_ANIM_ACTIVE"]] == 0
+    assert (om[VVBLKD] | (om[VVBLKD + 1] << 8)) == labels["XITVBV"]
 
 
 def test_render_room_png_matches_editor_model(tmp_path: Path) -> None:

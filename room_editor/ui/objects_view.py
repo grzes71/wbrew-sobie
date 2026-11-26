@@ -36,18 +36,24 @@ from room_editor.model.commands import (
     AddGroupCommand,
     AddGroupPaletteCommand,
     AddObjectCommand,
+    AddObjectFrameCommand,
     DeleteGroupCommand,
     DeleteGroupPaletteCommand,
     DeleteObjectCommand,
+    RemoveObjectFrameCommand,
     RenameGroupPaletteCommand,
     ReorderGroupPaletteCommand,
+    ReorderObjectFrameCommand,
+    ReplaceObjectFrameCommand,
     UndoStack,
     UpdateGroupCommand,
     UpdateGroupPaletteColorsCommand,
     UpdateObjectCommand,
 )
 from room_editor.model.glyphs import (
+    MAX_ANIMATION_SPEED,
     MAX_GLYPHS_PER_GROUP,
+    MAX_OBJECT_FRAMES,
     StampRegion,
 )
 from room_editor.model.palette import (
@@ -101,6 +107,7 @@ class ObjectsView(QWidget):
         self._selected_group_name: str | None = None
         self._selected_palette_name: str | None = None
         self._preview_palette_by_group: dict[str, str] = {}
+        self._clear_obj_selection = False
         self._selected_object_id: int | None = None
         self._tag_checkboxes: dict[str, QCheckBox] = {}
         self._block_signals = False
@@ -209,8 +216,12 @@ class ObjectsView(QWidget):
         btn_add_obj.clicked.connect(self._on_add_object)
         self._btn_del_obj = QPushButton("Delete Object")
         self._btn_del_obj.clicked.connect(self._on_delete_object)
+        self._btn_desel_obj = QPushButton("Deselect")
+        self._btn_desel_obj.setToolTip("Clear object selection to create a new object from Stamp Image")
+        self._btn_desel_obj.clicked.connect(self._on_deselect_object)
         obj_btns.addWidget(btn_add_obj)
         obj_btns.addWidget(self._btn_del_obj)
+        obj_btns.addWidget(self._btn_desel_obj)
         obj_layout.addLayout(obj_btns)
 
         self._obj_list = QListWidget()
@@ -244,6 +255,22 @@ class ObjectsView(QWidget):
         self._chk_non_blockable = QCheckBox("Non-blockable (hero can pass)")
         self._chk_pickable = QCheckBox("Pickable")
         self._chk_colpf3 = QCheckBox("COLPF3 (codes +128: 129..255)")
+
+        anim_row = QHBoxLayout()
+        self._spin_anim_speed = QSpinBox()
+        self._spin_anim_speed.setRange(0, MAX_ANIMATION_SPEED)
+        self._spin_anim_speed.setValue(0)
+        self._spin_anim_speed.setToolTip(
+            "ticks of 1/50 s between frame changes (PAL); 50 = 1 s; 0 = off"
+        )
+        self._spin_anim_speed.valueChanged.connect(self._on_anim_speed_changed)
+        self._lbl_anim_period = QLabel("off")
+        anim_row.addWidget(self._spin_anim_speed)
+        anim_row.addWidget(self._lbl_anim_period, 1)
+
+        self._lbl_anim_cells = QLabel("Static object")
+        self._lbl_anim_cells.setStyleSheet("color: #aaa;")
+
         btn_apply_obj = QPushButton("Apply Object Properties")
         btn_apply_obj.clicked.connect(self._on_apply_object_props)
 
@@ -251,6 +278,8 @@ class ObjectsView(QWidget):
         obj_form.addRow("Name:", self._edit_obj_name)
         obj_form.addRow("Group:", self._combo_obj_group)
         obj_form.addRow("Region (glyphs):", reg_row)
+        obj_form.addRow("Animation speed:", anim_row)
+        obj_form.addRow("Animation cells:", self._lbl_anim_cells)
         obj_form.addRow(self._chk_non_blockable)
         obj_form.addRow(self._chk_pickable)
         obj_form.addRow(self._chk_colpf3)
@@ -269,6 +298,10 @@ class ObjectsView(QWidget):
         self._stamp_widget = StampImageWidget(self._renderer, self)
         self._stamp_widget.create_object_requested.connect(self._on_create_from_selection)
         self._stamp_widget.apply_region_requested.connect(self._on_apply_selection_region)
+        self._stamp_widget.add_frame_requested.connect(self._on_add_frame_from_selection)
+        self._stamp_widget.replace_frame_requested.connect(self._on_replace_frame_from_selection)
+        self._stamp_widget.remove_frame_requested.connect(self._on_remove_frame)
+        self._stamp_widget.reorder_frame_requested.connect(self._on_reorder_frame)
         self._stamp_widget.selection_changed.connect(self._on_stamp_selection_changed)
         self._stamp_widget.preview_palette_changed.connect(self._on_stamp_preview_palette_changed)
         stamp_layout.addWidget(self._stamp_widget, 1)
@@ -287,8 +320,26 @@ class ObjectsView(QWidget):
         self.refresh()
 
     def select_object(self, obj_id: int) -> None:
+        self._clear_obj_selection = False
         self._selected_object_id = obj_id
         self.refresh()
+
+    def _on_deselect_object(self) -> None:
+        self._clear_obj_selection = True
+        self._selected_object_id = None
+        self._block_signals = True
+        try:
+            self._obj_list.clearSelection()
+            self._obj_list.setCurrentRow(-1)
+            self._sync_object_panel()
+        finally:
+            self._block_signals = False
+
+    def _on_anim_speed_changed(self, value: int) -> None:
+        if value <= 0:
+            self._lbl_anim_period.setText("off")
+        else:
+            self._lbl_anim_period.setText(f"= {value / 50.0:.2f} s per frame")
 
     def _active_preview_palette_name(self, grp: ObjectGroup | None) -> str:
         if grp is None or not grp.palettes:
@@ -300,7 +351,7 @@ class ObjectsView(QWidget):
 
     def _rebuild_object_list_items(self) -> None:
         self._obj_list.clear()
-        if (
+        if not self._clear_obj_selection and (
             self._selected_object_id is None
             or self._project.get_object(self._selected_object_id) is None
         ):
@@ -324,6 +375,10 @@ class ObjectsView(QWidget):
                 tags.append("PICK")
             if obj.colpf3:
                 tags.append("COLPF3")
+            if obj.is_animated:
+                tags.append(f"ANIM {obj.frame_count}@{obj.animation_speed}")
+            elif obj.frame_count > 1:
+                tags.append(f"{obj.frame_count}f")
             if err:
                 tags.append("ERR")
             suffix = f" [{' | '.join(tags)}]" if tags else ""
@@ -457,10 +512,12 @@ class ObjectsView(QWidget):
         self._spin_reg_y.setEnabled(enabled)
         self._spin_reg_w.setEnabled(enabled)
         self._spin_reg_h.setEnabled(enabled)
+        self._spin_anim_speed.setEnabled(enabled)
         self._chk_non_blockable.setEnabled(enabled)
         self._chk_pickable.setEnabled(enabled)
         self._chk_colpf3.setEnabled(enabled)
         self._btn_del_obj.setEnabled(enabled)
+        self._btn_desel_obj.setEnabled(enabled)
         for cb in self._tag_checkboxes.values():
             cb.setEnabled(enabled)
 
@@ -474,6 +531,17 @@ class ObjectsView(QWidget):
             self._spin_reg_y.setValue(obj.region.y)
             self._spin_reg_w.setValue(obj.region.w)
             self._spin_reg_h.setValue(obj.region.h)
+            self._spin_anim_speed.setValue(obj.animation_speed)
+            self._on_anim_speed_changed(obj.animation_speed)
+            if obj.is_animated:
+                self._lbl_anim_cells.setStyleSheet("color: #ccc;")
+                self._lbl_anim_cells.setText(
+                    f"{obj.constant_cell_count} constant, {obj.varying_cell_count} varying "
+                    f"→ {len(obj.dedicated_slots)} dedicated slot(s)"
+                )
+            else:
+                self._lbl_anim_cells.setStyleSheet("color: #888;")
+                self._lbl_anim_cells.setText("Static (all cells use shared pool)")
             self._chk_non_blockable.setChecked(obj.non_blockable)
             self._chk_pickable.setChecked(obj.pickable)
             self._chk_colpf3.setChecked(obj.colpf3)
@@ -489,6 +557,10 @@ class ObjectsView(QWidget):
             self._stamp_widget.set_data(self._project, display_grp, obj, pal_name)
         else:
             self._edit_obj_name.clear()
+            self._spin_anim_speed.setValue(0)
+            self._on_anim_speed_changed(0)
+            self._lbl_anim_cells.setStyleSheet("color: #888;")
+            self._lbl_anim_cells.setText("-")
             self._chk_non_blockable.setChecked(False)
             self._chk_pickable.setChecked(False)
             self._chk_colpf3.setChecked(False)
@@ -573,6 +645,7 @@ class ObjectsView(QWidget):
     def _on_object_list_changed(self, row: int) -> None:
         if self._block_signals or row < 0:
             return
+        self._clear_obj_selection = False
         self._selected_object_id = int(self._obj_list.item(row).data(Qt.ItemDataRole.UserRole))
         obj = self._project.get_object(self._selected_object_id)
         if obj is not None and self._project.get_group(obj.group) is not None:
@@ -939,9 +1012,19 @@ class ObjectsView(QWidget):
         if analysis is None:
             return
         problems: list[str] = []
+        if analysis.too_many_frames_object_ids:
+            problems.append(
+                f"Frame count outside 1..{MAX_OBJECT_FRAMES} on object ID(s): "
+                + ", ".join(str(i) for i in sorted(analysis.too_many_frames_object_ids))
+            )
+        if analysis.invalid_frame_size_object_ids:
+            problems.append(
+                "Frame dimensions mismatch on object ID(s): "
+                + ", ".join(str(i) for i in sorted(analysis.invalid_frame_size_object_ids))
+            )
         if analysis.invalid_region_object_ids:
             problems.append(
-                "Out-of-image region on object ID(s): "
+                "Out-of-image frame/region on object ID(s): "
                 + ", ".join(str(i) for i in sorted(analysis.invalid_region_object_ids))
             )
         if analysis.empty_object_ids:
@@ -1029,8 +1112,136 @@ class ObjectsView(QWidget):
             region=region,
         )
         self._undo_stack.push_and_execute(AddObjectCommand(self._project, obj))
+        self._clear_obj_selection = False
         self._selected_object_id = obj.id
         self.model_changed.emit()
+
+    def _on_add_frame_from_selection(self, region: StampRegion) -> None:
+        if self._selected_object_id is None:
+            return
+        obj = self._project.get_object(self._selected_object_id)
+        if obj is None:
+            return
+        if obj.frame_count >= MAX_OBJECT_FRAMES:
+            QMessageBox.warning(self, "Frame Limit", f"Cannot exceed {MAX_OBJECT_FRAMES} frames.")
+            return
+        if (region.w, region.h) != (obj.w, obj.h):
+            QMessageBox.warning(
+                self,
+                "Frame Size Mismatch",
+                f"Frame size ({region.w}×{region.h}) must match object size ({obj.w}×{obj.h}).",
+            )
+            return
+
+        new_frames = list(obj.frames) + [region]
+        grp = self._project.get_group(obj.group)
+        if grp is not None and grp.image is not None:
+            check = self._project.check_object_glyph_budget(
+                obj.group,
+                new_frames,
+                obj.animation_speed,
+                exclude_object_id=obj.id,
+            )
+            if not check.ok:
+                QMessageBox.warning(self, "Cannot Add Frame", check.error_message)
+                return
+
+        if not obj.non_blockable:
+            conflicts = self._project.find_blockable_overlaps_for_object(
+                obj.id,
+                new_frames=new_frames,
+            )
+            if conflicts:
+                preview = "\n".join(
+                    f"• Room #{rid} '{rname}' at ({cx}, {cy}) with object #{other_id}"
+                    for rid, rname, cx, cy, other_id in conflicts[:10]
+                )
+                QMessageBox.warning(
+                    self,
+                    "Blockable Overlap Conflict",
+                    f"Adding this frame would cause blockable overlap:\n\n{preview}",
+                )
+                return
+
+        new_idx = obj.frame_count
+        self._undo_stack.push_and_execute(AddObjectFrameCommand(self._project, obj, region))
+        self.model_changed.emit()
+        self._stamp_widget.set_selected_frame_index(new_idx)
+
+    def _on_replace_frame_from_selection(self, frame_idx: int, region: StampRegion) -> None:
+        if self._selected_object_id is None:
+            return
+        obj = self._project.get_object(self._selected_object_id)
+        if obj is None or not (0 <= frame_idx < len(obj.frames)):
+            return
+        if (region.w, region.h) != (obj.w, obj.h):
+            QMessageBox.warning(
+                self,
+                "Frame Size Mismatch",
+                f"Frame size ({region.w}×{region.h}) must match object size ({obj.w}×{obj.h}).",
+            )
+            return
+
+        new_frames = list(obj.frames)
+        new_frames[frame_idx] = region
+        grp = self._project.get_group(obj.group)
+        if grp is not None and grp.image is not None:
+            check = self._project.check_object_glyph_budget(
+                obj.group,
+                new_frames,
+                obj.animation_speed,
+                exclude_object_id=obj.id,
+            )
+            if not check.ok:
+                QMessageBox.warning(self, "Cannot Replace Frame", check.error_message)
+                return
+
+        if not obj.non_blockable:
+            conflicts = self._project.find_blockable_overlaps_for_object(
+                obj.id,
+                new_frames=new_frames,
+            )
+            if conflicts:
+                preview = "\n".join(
+                    f"• Room #{rid} '{rname}' at ({cx}, {cy}) with object #{other_id}"
+                    for rid, rname, cx, cy, other_id in conflicts[:10]
+                )
+                QMessageBox.warning(
+                    self,
+                    "Blockable Overlap Conflict",
+                    f"Replacing this frame would cause blockable overlap:\n\n{preview}",
+                )
+                return
+
+        self._undo_stack.push_and_execute(
+            ReplaceObjectFrameCommand(self._project, obj, frame_idx, region)
+        )
+        self.model_changed.emit()
+        self._stamp_widget.set_selected_frame_index(frame_idx)
+
+    def _on_remove_frame(self, frame_idx: int) -> None:
+        if self._selected_object_id is None:
+            return
+        obj = self._project.get_object(self._selected_object_id)
+        if obj is None or obj.frame_count <= 1 or not (0 <= frame_idx < obj.frame_count):
+            return
+        self._undo_stack.push_and_execute(
+            RemoveObjectFrameCommand(self._project, obj, frame_idx)
+        )
+        self.model_changed.emit()
+        self._stamp_widget.set_selected_frame_index(max(0, min(frame_idx, obj.frame_count - 1)))
+
+    def _on_reorder_frame(self, from_idx: int, to_idx: int) -> None:
+        if self._selected_object_id is None:
+            return
+        obj = self._project.get_object(self._selected_object_id)
+        if obj is None or not (0 <= from_idx < obj.frame_count and 0 <= to_idx < obj.frame_count):
+            return
+        self._undo_stack.push_and_execute(
+            ReorderObjectFrameCommand(self._project, obj, from_idx, to_idx)
+        )
+        self.model_changed.emit()
+        self._stamp_widget.set_selected_frame_index(to_idx)
 
     def _on_stamp_selection_changed(self, region: StampRegion) -> None:
         if self._block_signals:
@@ -1096,6 +1307,7 @@ class ObjectsView(QWidget):
         new_nb = self._chk_non_blockable.isChecked()
         new_pickable = self._chk_pickable.isChecked()
         new_colpf3 = self._chk_colpf3.isChecked()
+        new_speed = self._spin_anim_speed.value()
 
         if not new_name:
             QMessageBox.warning(self, "Invalid Name", "Object name cannot be empty.")
@@ -1108,6 +1320,14 @@ class ObjectsView(QWidget):
                 f"exceeds the {MAX_OBJECT_CELLS}-cell limit.",
             )
             return
+        if len(obj.frames) > 1 and (new_region.w, new_region.h) != (obj.w, obj.h):
+            QMessageBox.warning(
+                self,
+                "Frame Size Mismatch",
+                f"Object has {len(obj.frames)} frames; cannot change frame 0 size "
+                f"from {obj.w}×{obj.h} to {new_region.w}×{new_region.h}.",
+            )
+            return
         for other in self._project.objects:
             if other is not obj:
                 if other.id == new_id:
@@ -1117,12 +1337,14 @@ class ObjectsView(QWidget):
                     QMessageBox.warning(self, "Duplicate Name", f"Object name '{new_name}' is already in use.")
                     return
 
+        new_frames = [new_region] + list(obj.frames[1:])
         target_grp = self._project.get_group(new_group)
         if target_grp is not None and target_grp.image is not None:
             exclude_id = obj.id if new_group == obj.group else None
-            check = self._project.check_region_glyph_budget(
+            check = self._project.check_object_glyph_budget(
                 new_group,
-                new_region,
+                new_frames,
+                new_speed,
                 exclude_object_id=exclude_id,
             )
             if not check.ok:
@@ -1132,7 +1354,8 @@ class ObjectsView(QWidget):
         if not new_nb:
             conflicts = self._project.find_blockable_overlaps_for_object(
                 obj.id,
-                new_region=new_region,
+                new_frames=new_frames,
+                new_animation_speed=new_speed,
                 new_group=new_group,
             )
             if conflicts:
@@ -1163,7 +1386,8 @@ class ObjectsView(QWidget):
                 non_blockable=new_nb,
                 pickable=new_pickable,
                 colpf3=new_colpf3,
-                region=new_region,
+                frames=new_frames,
+                animation_speed=new_speed,
             )
         )
         self._selected_object_id = new_id

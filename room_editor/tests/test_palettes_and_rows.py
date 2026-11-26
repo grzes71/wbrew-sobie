@@ -229,7 +229,7 @@ def test_yaml_v4_round_trip_compact_rows_and_errors(tmp_path: Path) -> None:
 
     assert f"version: {PROJECT_VERSION}" in text1
     doc = yaml.safe_load(text1)
-    assert doc["version"] == 4
+    assert doc["version"] == 5
     assert [p["name"] for p in doc["object_groups"][0]["palettes"]] == ["day", "night"]
     r1_rows = doc["rooms"][0]["row_groups"]
     assert len(r1_rows) == ROOM_HEIGHT
@@ -256,8 +256,8 @@ def test_yaml_v4_round_trip_compact_rows_and_errors(tmp_path: Path) -> None:
     assert reloaded_explicit.project == proj
     assert serialize_project_to_yaml(reloaded_explicit.project) == text1
 
-    # Older versions (1, 2, 3) are rejected
-    for old_ver in (1, 2, 3):
+    # Older versions (1, 2, 3, 4) are rejected
+    for old_ver in (1, 2, 3, 4):
         with pytest.raises(UnsupportedVersionError, match="version"):
             deserialize_project_from_yaml(f"version: {old_ver}\nrooms: []\n")
 

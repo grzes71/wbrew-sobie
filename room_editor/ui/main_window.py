@@ -361,14 +361,14 @@ class MainWindow(QMainWindow):
             self._handle_missing_images(result.missing_images, proj_path)
 
         if result.glyph_table_mismatches:
-            mm_details = "\n".join(
+            lines = [
                 f"• Group '{g}': {msg}" for g, msg in result.glyph_table_mismatches
-            )
+            ]
             QMessageBox.warning(
                 self,
-                "Glyph Table Regenerated",
+                "Glyph Tables Regenerated",
                 "Stored glyph tables in the YAML did not match the PNG images and were recomputed:\n\n"
-                + mm_details,
+                + "\n".join(lines),
             )
 
         self._bind_context()

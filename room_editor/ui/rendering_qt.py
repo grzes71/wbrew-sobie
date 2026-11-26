@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
 
 from room_editor.model.glyphs import (
+    EMPTY_GLYPH_BYTES,
     GLYPH_HEIGHT,
     GLYPH_WIDTH,
     IndexedImage,
+    StampRegion,
     render_glyph_bytes_rgba_2x1,
 )
 from room_editor.model.palette import PalPaletteTable, Palette
@@ -114,7 +118,12 @@ class QtRenderer:
         self._image_cache[key] = qimg
         return qimg
 
-    def render_room_image(self, project: Project, room: Room) -> QImage:
+    def render_room_image(
+        self,
+        project: Project,
+        room: Room,
+        frame_overrides: Mapping[int, int] | None = None,
+    ) -> QImage:
         """Render a full 40x24 room as a 320x192 QImage using per-row (group, palette)."""
         img = QImage(
             ROOM_DISPLAY_WIDTH,
@@ -140,6 +149,15 @@ class QtRenderer:
                 QColor(*bg_rgb),
             )
 
+        ded_slot_bytes: dict[tuple[str, int], bytes] = {}
+        if frame_overrides:
+            for grp_it in project.object_groups:
+                for entry in grp_it.glyph_table.entries:
+                    if not entry.is_dedicated or entry.object_id not in frame_overrides:
+                        continue
+                    wrapped_idx = int(frame_overrides[entry.object_id]) % len(entry.frames)
+                    ded_slot_bytes[(grp_it.name, entry.code)] = entry.frames[wrapped_idx]
+
         grid = project.compose_room(room)
         for cy in range(ROOM_HEIGHT):
             ra = room.row_groups[cy]
@@ -154,7 +172,10 @@ class QtRenderer:
                 if row_grp is None or row_grp.image is None or row_pal is None:
                     painter.fillRect(px, py, CHAR_PX_W, CHAR_PX_H, QColor(120, 60, 60))
                     continue
-                glyph_bytes = row_grp.glyph_table.glyph_bytes(code)
+                base_code = code & 0x7F
+                glyph_bytes = ded_slot_bytes.get((ra.group, base_code))
+                if glyph_bytes is None:
+                    glyph_bytes = row_grp.glyph_table.glyph_bytes(code)
                 if glyph_bytes is None:
                     continue
                 g_img = self.glyph_image(
@@ -166,6 +187,65 @@ class QtRenderer:
 
         painter.end()
         return img
+
+    def render_region_pixmap(
+        self,
+        group: ObjectGroup | None,
+        region: StampRegion,
+        *,
+        colpf3: bool = False,
+        scale: int = 2,
+        palette: Palette | None = None,
+    ) -> QPixmap:
+        """Render any rectangular StampRegion directly from a group's PNG (works for any frame)."""
+        w_px = max(1, region.w) * CHAR_PX_W * scale
+        h_px = max(1, region.h) * CHAR_PX_H * scale
+        pix = QPixmap(w_px, h_px)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+
+        active_pal = (
+            palette
+            if palette is not None
+            else (group.default_palette if group is not None else None)
+        )
+        valid_img = (
+            group is not None
+            and group.image is not None
+            and active_pal is not None
+            and region.is_within_image(group.image)
+        )
+        for dy in range(max(1, region.h)):
+            for dx in range(max(1, region.w)):
+                rx = dx * CHAR_PX_W * scale
+                ry = dy * CHAR_PX_H * scale
+                rw = CHAR_PX_W * scale
+                rh = CHAR_PX_H * scale
+                if not valid_img:
+                    painter.fillRect(rx, ry, rw, rh, QColor(120, 70, 70))
+                    continue
+                assert group is not None and group.image is not None and active_pal is not None
+                glyph_bytes = group.image.extract_glyph_bytes(
+                    region.x + dx,
+                    region.y + dy,
+                    group.pixel_mapping,
+                )
+                if glyph_bytes == EMPTY_GLYPH_BYTES:
+                    painter.fillRect(rx, ry, rw, rh, QColor(45, 45, 50, 120))
+                else:
+                    g_img = self.glyph_image(glyph_bytes, active_pal, colpf3=colpf3)
+                    painter.drawImage(
+                        rx,
+                        ry,
+                        g_img.scaled(
+                            rw,
+                            rh,
+                            Qt.AspectRatioMode.IgnoreAspectRatio,
+                            Qt.TransformationMode.FastTransformation,
+                        ),
+                    )
+        painter.end()
+        return pix
 
     def render_object_pixmap(
         self,

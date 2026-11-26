@@ -235,7 +235,7 @@ def test_t6_yaml_v3_round_trip_and_keywords(tmp_path: Path) -> None:
     save_project(proj, yaml_path)
     first_text = yaml_path.read_text(encoding="utf-8")
 
-    assert "version: 4" in first_text
+    assert "version: 5" in first_text
     assert "repeat-x:" in first_text
     assert "repeat-y: 24" in first_text
     assert "repeat-xy: [40, 24]" in first_text
@@ -257,8 +257,8 @@ def test_t6_yaml_v3_round_trip_and_keywords(tmp_path: Path) -> None:
 
 
 def test_t8_version_rejection_relative_png_paths_and_glyph_consistency(tmp_path: Path) -> None:
-    # Version 1, 2, 3, 99, and missing version are all rejected
-    for bad_ver in (1, 2, 3, 99):
+    # Version 1, 2, 3, 4, 99, and missing version are all rejected
+    for bad_ver in (1, 2, 3, 4, 99):
         with pytest.raises(UnsupportedVersionError, match="version"):
             deserialize_project_from_yaml(f"version: {bad_ver}\nrooms: []\n")
 

@@ -61,7 +61,7 @@ Uruchomienie edytora:
 
 ## Room Editor
 
-Edytor komnat, grup obiektów (indeksowany obraz PNG + mapowanie kolorów + nazwane palety PAL, z automatyczną tabelą do 127 unikalnych glifów), przypisań par `(grupa, paleta)` dla każdego z 24 wierszy oraz układów ANTIC 4 (`40×24`) z zapisem do formatu `.yaml` w wersji 4 ([`room_editor/`](room_editor/), specyfikacja: [`room_editor/SPECIFICATION.md`](room_editor/SPECIFICATION.md)).
+Edytor komnat, grup obiektów (indeksowany obraz PNG + mapowanie kolorów + nazwane palety PAL, automatyczna tabela do 127 glifów łącząca wspólne komórki stałe oraz współdzielone wewnątrz obiektu sloty animacji), animowanych obiektów poklatkowych (`1..16` klatek, prędkość w taktach VBI PAL 50 Hz), przypisań par `(grupa, paleta)` dla każdego z 24 wierszy oraz układów ANTIC 4 (`40×24`) z zapisem do formatu `.yaml` w wersji 5 ([`room_editor/`](room_editor/), specyfikacja: [`room_editor/SPECIFICATION.md`](room_editor/SPECIFICATION.md)).
 
 Uruchomienie edytora komnat:
 
@@ -79,7 +79,7 @@ Uruchomienie edytora komnat:
 | [`hardware.asm`](hardware.asm) | Definicje rejestrów sprzętowych ANTIC, GTIA, POKEY, PIA |
 | [`colors.asm`](colors.asm) | Globalna paleta kolorów oraz konfiguracja elementów PMG ekranu tytułowego |
 | [`zeropage.asm`](zeropage.asm) | Alokacje zmiennych na stronie zerowej (`$80`–`$FF`) |
-| [`engine/`](engine/) | Moduły silnika: obsługa przerwań DLI ([`dli.asm`](engine/dli.asm) — przełączanie `CHBASE`, `HPOSM0..HPOSM3` oraz stylów komnaty), odczyt joysticka ([`input.asm`](engine/input.asm)), renderer komnat ANTIC 4 ([`room.asm`](engine/room.asm)) |
+| [`engine/`](engine/) | Moduły silnika: obsługa przerwań DLI/VBI ([`dli.asm`](engine/dli.asm) — `CHBASE`, `HPOSM0..HPOSM3`, style komnaty, `game_vbi_deferred`), odczyt joysticka ([`input.asm`](engine/input.asm)), renderer komnat ANTIC 4 ([`room.asm`](engine/room.asm)), deduplikowana animacja zmiennych slotów PAL 50 Hz (Forma 1 / Forma 2 + wspólna pula wzorców, [`anim.asm`](engine/anim.asm)) |
 | [`lib/`](lib/) | Biblioteki pomocnicze 6502: obsługa PMG ([`pmg.asm`](lib/pmg.asm)), dekompresja RLE ([`rle.asm`](lib/rle.asm)), relokowalny 4-kanałowy odtwarzacz muzyki POKEY v2 ([`player.asm`](lib/player.asm)) |
 | [`scenes/`](scenes/) | Sceny gry: ekran tytułowy ([`title.asm`](scenes/title.asm) — grafika ANTIC 4, napisy PMG, animacja falowa 5. gracza i muzyka tytułowa), intro ([`intro.asm`](scenes/intro.asm) — tryb ANTIC 2 z efektem maszyny do pisania i polskimi znakami), gra ([`game.asm`](scenes/game.asm)), ekran końcowy ([`gameover.asm`](scenes/gameover.asm)) |
 | [`music/`](music/) | Źródłowe kompozycje muzyczne w formacie Music DSL ([`title.dsl`](music/title.dsl)) oraz manifesty aranżacji ([`title.arrangement.json`](music/title.arrangement.json)) |

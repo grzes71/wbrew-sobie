@@ -3,12 +3,14 @@
 ; ==============================================================================
 
 .proc game_enter
-    ; 1. Disable DLI and display DMA while building room display
+    ; 1. Disable DLI, display DMA, and VBI animations while building room display
     lda #$40
     sta NMIEN
     lda #0
     sta SDMCTL
     sta DMACTL
+    sta zp_anim_active
+    sta zp_anim_pending
 
     ; 2. Silence / disable PMG inherited from Title Screen
     sta GRACTL
@@ -28,13 +30,18 @@
     sta GRAFP3
     sta GRAFM
 
-    ; 3. Render START_ROOM into SCREEN_VRAM ($3000) and build room Display List + styles
+    ; 3. Render START_ROOM into SCREEN_VRAM ($3000), build Display List, and init animations
     ldx #START_ROOM
     jsr room_draw
     ldx #START_ROOM
     jsr room_setup_display
+    ldx #START_ROOM
+    jsr room_anim_init
 
-    ; 4. Install room Display List and DLI handler vector
+    ; 4. Atomically install room Display List, DLI handler, and Deferred VBI vector
+    lda #$00
+    sta NMIEN
+
     lda #<room_dlist
     sta SDLSTL
     sta DLISTL
@@ -46,6 +53,11 @@
     sta VDSLST
     lda #>room_dli_handler
     sta VDSLST+1
+
+    lda #<game_vbi_deferred
+    sta VVBLKD
+    lda #>game_vbi_deferred
+    sta VVBLKD+1
 
     ; 5. Re-enable normal playfield DMA ($22) via OS shadow (and direct DMACTL)
     lda #$22
@@ -81,12 +93,22 @@
     beq @victory
 
     lda #STATE_GAME_OVER_FAILURE
-    sta zp_next_state
-    rts
-
+    bne @leave_game
 @victory
     lda #STATE_GAME_OVER_SUCCESS
+@leave_game
     sta zp_next_state
+    lda #$00
+    sta zp_anim_active
+    sta zp_anim_pending
+    sta NMIEN
+    lda #<XITVBV
+    sta VVBLKD
+    lda #>XITVBV
+    sta VVBLKD+1
+    sta NMIRES
+    lda #$40
+    sta NMIEN
 @stay
     rts
 .endp

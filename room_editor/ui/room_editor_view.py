@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPainter, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -177,9 +178,14 @@ class RoomGridCanvas(QWidget):
         self._drag_current_cell: tuple[int, int] | None = None
         self._selected_indices: set[int] = set()
         self._clipboard: list[tuple[int, int, int]] = []  # (object_id, dx, dy)
+        self._frame_overrides: dict[int, int] = {}
 
         self.setMouseTracking(True)
         self._update_size()
+
+    def set_frame_overrides(self, overrides: Mapping[int, int] | None) -> None:
+        self._frame_overrides = dict(overrides) if overrides else {}
+        self.update()
 
     def set_context(self, project: Project, undo_stack: UndoStack, room: Room | None) -> None:
         self._project = project
@@ -265,8 +271,10 @@ class RoomGridCanvas(QWidget):
         cw = self._cell_w()
         ch = self._cell_h()
 
-        # Render faithful ANTIC 4 room image
-        room_img = self._renderer.render_room_image(self._project, self._room)
+        # Render faithful ANTIC 4 room image (with optional UI-only animation frame overrides)
+        room_img = self._renderer.render_room_image(
+            self._project, self._room, frame_overrides=self._frame_overrides or None
+        )
         painter.drawImage(self.rect(), room_img)
 
         # Grid overlay
@@ -634,6 +642,10 @@ class RoomEditorView(QWidget):
         self._current_room_id: int | None = None
         self._last_clicked_row: int | None = None
         self._preview_palette_by_group: dict[str, str] = {}
+        self._anim_counters: dict[int, int] = {}
+        self._anim_frames: dict[int, int] = {}
+        self._anim_timer = QTimer(self)
+        self._anim_timer.timeout.connect(self._on_anim_tick)
 
         self._setup_ui()
 
@@ -717,6 +729,14 @@ class RoomEditorView(QWidget):
         self._chk_grid.setChecked(True)
         self._chk_grid.toggled.connect(self._on_toggle_grid)
         tools_bar.addWidget(self._chk_grid)
+
+        self._chk_animate = QCheckBox("Animate preview")
+        self._chk_animate.setChecked(False)
+        self._chk_animate.setToolTip(
+            "Play animated objects in this room at their PAL (50 Hz) animation speed (preview only)"
+        )
+        self._chk_animate.toggled.connect(self._on_toggle_animate_preview)
+        tools_bar.addWidget(self._chk_animate)
 
         btn_zoom_out = QPushButton("-")
         btn_zoom_out.setFixedWidth(26)
@@ -852,8 +872,11 @@ class RoomEditorView(QWidget):
         )
         self._gutter.set_context(self._project, room)
         self._canvas.set_context(self._project, self._undo_stack, room)
+        self._reset_anim_preview_state()
+        self._sync_animate_timer()
         self._sync_preview_pal_combo()
         self._refresh_object_list()
+        self._sync_animate_timer()
 
     def set_preview_palette(self, group_name: str, palette_name: str) -> None:
         if group_name and palette_name:
@@ -975,6 +998,8 @@ class RoomEditorView(QWidget):
         )
         self._gutter.set_context(self._project, room)
         self._canvas.set_context(self._project, self._undo_stack, room)
+        self._reset_anim_preview_state()
+        self._sync_animate_timer()
 
     def _on_object_selected(self, row: int) -> None:
         if row < 0:
@@ -1028,6 +1053,67 @@ class RoomEditorView(QWidget):
 
     def _on_toggle_grid(self, checked: bool) -> None:
         self._canvas.set_show_grid(checked)
+
+    def _reset_anim_preview_state(self) -> None:
+        self._anim_counters.clear()
+        self._anim_frames.clear()
+        self._canvas.set_frame_overrides(None)
+
+    def _active_room_anim_objects(self) -> list[GameObject]:
+        if self._current_room_id is None:
+            return []
+        room = self._project.get_room(self._current_room_id)
+        if room is None:
+            return []
+        obj_ids = sorted({inst.object_id for inst in room.instances})
+        res: list[GameObject] = []
+        for oid in obj_ids:
+            obj = self._project.get_object(oid)
+            if obj is not None and obj.is_animated:
+                res.append(obj)
+        return res
+
+    def _sync_animate_timer(self) -> None:
+        if not self._chk_animate.isChecked():
+            self._anim_timer.stop()
+            self._reset_anim_preview_state()
+            return
+        anim_objs = self._active_room_anim_objects()
+        if not anim_objs:
+            self._anim_timer.stop()
+            self._canvas.set_frame_overrides(None)
+            return
+        active_ids = {o.id for o in anim_objs}
+        for stale in [oid for oid in self._anim_counters if oid not in active_ids]:
+            self._anim_counters.pop(stale, None)
+            self._anim_frames.pop(stale, None)
+        for obj in anim_objs:
+            if obj.id not in self._anim_counters:
+                self._anim_counters[obj.id] = obj.animation_speed
+                self._anim_frames[obj.id] = 0
+        self._canvas.set_frame_overrides(self._anim_frames)
+        if not self._anim_timer.isActive():
+            self._anim_timer.start(20)  # PAL 50 Hz ticks
+
+    def _on_toggle_animate_preview(self, _checked: bool) -> None:
+        self._reset_anim_preview_state()
+        self._sync_animate_timer()
+
+    def _on_anim_tick(self) -> None:
+        anim_objs = self._active_room_anim_objects()
+        if not anim_objs or not self._chk_animate.isChecked():
+            self._sync_animate_timer()
+            return
+        changed = False
+        for obj in anim_objs:
+            cnt = self._anim_counters.get(obj.id, obj.animation_speed) - 1
+            if cnt <= 0:
+                cnt = obj.animation_speed
+                self._anim_frames[obj.id] = (self._anim_frames.get(obj.id, 0) + 1) % obj.frame_count
+                changed = True
+            self._anim_counters[obj.id] = cnt
+        if changed:
+            self._canvas.set_frame_overrides(self._anim_frames)
 
     def _set_zoom(self, zoom: int) -> None:
         self._canvas.set_zoom(zoom)

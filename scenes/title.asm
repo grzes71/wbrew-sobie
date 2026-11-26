@@ -33,6 +33,8 @@
     lda #0
     sta SDMCTL
     sta DMACTL
+    sta zp_anim_active
+    sta zp_anim_pending
 
     ; 2. Apply global colors from colors.asm
     jsr apply_global_palette

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile room editor YAML v4 projects and group PNGs into MADS 6502 assembly."""
+"""Compile room editor YAML v5 projects into MADS 6502 assembly."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from PIL import Image
 # Engine / hardware constants (SSOT for generated data)
 # ---------------------------------------------------------------------------
 
-EXPECTED_YAML_VERSION = 4
+EXPECTED_YAML_VERSION = 5
 ROOM_WIDTH = 40
 ROOM_HEIGHT = 24
 ROOM_SCREEN_SIZE = ROOM_WIDTH * ROOM_HEIGHT  # 960 bytes
@@ -34,6 +34,8 @@ EMPTY_GLYPH_BYTES = b"\x00" * GLYPH_BYTES
 MAX_ROOMS = 255
 MAX_OBJECTS = 255
 MAX_OBJECT_CELLS = 255
+MAX_OBJECT_FRAMES = 16
+MAX_ANIMATION_SPEED = 255
 MAX_INSTANCES_PER_ROOM = 255
 MAX_STYLES = 256
 MAX_TELEPORTS = 255
@@ -105,8 +107,14 @@ class CompiledGroup:
     height_px: int
     pixels: bytes
     palettes: list[CompiledPalette]
+    has_image: bool = True
     glyphs: list[bytes] = field(default_factory=list)  # 1-based glyph bytes, len <= 127
-    glyph_sources: list[tuple[int, int]] = field(default_factory=list)
+    glyph_sources: list[tuple[int, int] | None] = field(default_factory=list)
+    glyph_owners: list[tuple[int, tuple[tuple[int, int], ...], tuple[bytes, ...]] | None] = field(
+        default_factory=list
+    )
+    static_glyph_count: int = 0
+    dedicated_slot_count: int = 0
     yaml_glyphs: list[dict[str, Any]] | None = None
 
     @property
@@ -124,6 +132,14 @@ class CompiledGroup:
         return None
 
 
+@dataclass(frozen=True)
+class CompiledFrame:
+    x: int
+    y: int
+    w: int
+    h: int
+
+
 @dataclass
 class CompiledObject:
     id: int
@@ -134,13 +150,41 @@ class CompiledObject:
     non_blockable: bool
     pickable: bool
     colpf3: bool
-    x: int
-    y: int
-    w: int
-    h: int
+    frames: list[CompiledFrame]
+    animation_speed: int = 0
     cells: bytes = b""
     has_pixel11: bool = False
     cell_block_name: str = ""
+    anim_index: int | None = None  # 0..A-1 if animated with >=1 varying cell, else None
+    constant_cell_count: int = 0
+    varying_cell_count: int = 0
+    dedicated_slot_codes: list[int] = field(default_factory=list)
+    dedicated_slot_frames: list[tuple[bytes, ...]] = field(default_factory=list)
+    dedicated_slot_cells: list[tuple[tuple[int, int], ...]] = field(default_factory=list)
+
+    @property
+    def dedicated_slot_count(self) -> int:
+        return len(self.dedicated_slot_codes)
+
+    @property
+    def x(self) -> int:
+        return self.frames[0].x
+
+    @property
+    def y(self) -> int:
+        return self.frames[0].y
+
+    @property
+    def w(self) -> int:
+        return self.frames[0].w
+
+    @property
+    def h(self) -> int:
+        return self.frames[0].h
+
+    @property
+    def is_animated(self) -> bool:
+        return len(self.frames) >= 2 and self.animation_speed > 0
 
     @property
     def flags(self) -> int:
@@ -152,6 +196,23 @@ class CompiledObject:
         if self.pickable:
             val |= OBJ_FLAG_PICKABLE
         return val
+
+
+@dataclass
+class CompiledAnimation:
+    index: int
+    obj: CompiledObject
+    group_ident_lower: str
+    speed: int
+    frame_count: int
+    slot_count: int
+    bank_index: int
+    use_form2: bool
+    flags_byte: int
+    scodes_label: str
+    data_label: str
+    encoded_bytes: int
+    naive_bytes: int
 
 
 @dataclass(frozen=True)
@@ -177,6 +238,8 @@ class CompiledRoom:
     raw_placed: list[CompiledInstance]
     ordered_placed: list[CompiledInstance] = field(default_factory=list)
     row_styles: list[int] = field(default_factory=list)
+    anim_indices: list[int] = field(default_factory=list)
+    anim_list_label: str = ""
     left_id: int = 0
     right_id: int = 0
     up_id: int = 0
@@ -220,12 +283,29 @@ class RoomSizeStats:
     total_bytes: int
 
 
+@dataclass(frozen=True)
+class AnimObjectStats:
+    anim_idx: int
+    object_id: int
+    name: str
+    frame_count: int
+    constant_cells: int
+    varying_cells: int
+    slot_count: int
+    speed: int
+    bank_index: int
+    form: str
+    encoded_bytes: int
+    naive_bytes: int
+
+
 @dataclass
 class CompileReport:
     source_yaml: Path
     input_hash: str
     charset_count: int
     group_glyph_usage: list[tuple[str, int]]
+    group_glyph_breakdown: list[tuple[str, int, int, int]]  # (name, total, static, dedicated)
     style_count: int
     tag_count: int
     tag_plane_count: int
@@ -234,6 +314,16 @@ class CompileReport:
     object_id_gaps: int
     object_cell_raw_bytes: int
     object_cell_dedup_bytes: int
+    anim_count: int
+    anim_pool_count: int
+    anim_pattern_count: int
+    anim_pool_bytes: int
+    max_room_anims: int
+    max_room_anim_slots: int
+    max_room_form1_slots: int
+    anim_stats: list[AnimObjectStats]
+    anim_frame_raw_bytes: int
+    anim_frame_dedup_bytes: int
     room_count: int
     room_max_id: int
     room_id_gaps: int
@@ -246,16 +336,41 @@ class CompileReport:
 
     def format_text(self) -> str:
         lines: list[str] = [
-            f"Compiled {self.source_yaml.as_posix()} (sha256: {self.input_hash[:16]})",
+            f"Compiled {self.source_yaml.as_posix()} (sha256: {self.input_hash[:16]}) [PAL 50 Hz]",
             f"  Groups/Charsets: {self.charset_count} ("
-            + ", ".join(f"{name}={used}/{MAX_GLYPHS_PER_GROUP}" for name, used in self.group_glyph_usage)
+            + ", ".join(
+                f"{name}={used}/{MAX_GLYPHS_PER_GROUP} (static={st}, dedicated={ded})"
+                for name, used, st, ded in self.group_glyph_breakdown
+            )
             + ")",
             f"  Styles used: {self.style_count} | Objects: {self.object_count} (max_id={self.object_max_id}, gaps={self.object_id_gaps}) | Tags: {self.tag_count} ({self.tag_plane_count} plane(s))",
+            (
+                f"  Animated objects: {self.anim_count} (max/room={self.max_room_anims}, "
+                f"max slots/room={self.max_room_anim_slots}, form1 slots/room={self.max_room_form1_slots})"
+            ),
+            (
+                f"  Animation pattern pool: {self.anim_pattern_count} pattern(s) across {self.anim_pool_count} bank(s) "
+                f"({self.anim_pool_bytes} B)"
+            ),
             f"  Rooms: {self.room_count} (max_id={self.room_max_id}, gaps={self.room_id_gaps}) | Teleports: {self.teleport_count}",
             f"  Object cell data: {self.object_cell_raw_bytes} B raw -> {self.object_cell_dedup_bytes} B dedup (saved {self.object_cell_raw_bytes - self.object_cell_dedup_bytes} B)",
+            (
+                f"  Animation data: {self.anim_frame_raw_bytes} B naive (8*slots*frames) -> "
+                f"{self.anim_frame_dedup_bytes} B encoded (saved {self.anim_frame_raw_bytes - self.anim_frame_dedup_bytes} B)"
+            ),
             f"  ID-gap table waste: {self.id_gap_wasted_bytes} B",
-            "  Per-room instance + style payload (vs 5-plane baseline & 960 B raw screen):",
         ]
+        if self.anim_stats:
+            lines.append("  Animated objects breakdown:")
+            for ast_item in self.anim_stats:
+                saved_obj = ast_item.naive_bytes - ast_item.encoded_bytes
+                lines.append(
+                    f"    Anim #{ast_item.anim_idx} (obj #{ast_item.object_id} '{ast_item.name}'): "
+                    f"const={ast_item.constant_cells}, vary={ast_item.varying_cells}, slots={ast_item.slot_count}, "
+                    f"{ast_item.frame_count} frames @ speed={ast_item.speed}, bank={ast_item.bank_index}, "
+                    f"form={ast_item.form}: {ast_item.encoded_bytes} B (naive {ast_item.naive_bytes} B, saved {saved_obj} B)"
+                )
+        lines.append("  Per-room instance + style payload (vs 5-plane baseline & 960 B raw screen):")
         tot_inst = 0
         tot_base = 0
         tot_rs = 0
@@ -548,11 +663,14 @@ def compile_project(
         grp_idents_lower.add(ident_l)
 
         img_rel = str(g.get("image") or "").strip()
-        if not img_rel:
-            raise RoomCompileError(f"Object group '{gname}' has no PNG image path.")
-        img_path = base_dir / img_rel
-        w_px, h_px, px_bytes, png_raw = _load_indexed_png(img_path, gname)
-        hasher.update(gname.encode("utf-8") + b"\x00" + png_raw)
+        img_path = (base_dir / img_rel) if img_rel else Path()
+        if img_rel and img_path.exists():
+            w_px, h_px, px_bytes, png_raw = _load_indexed_png(img_path, gname)
+            hasher.update(gname.encode("utf-8") + b"\x00" + png_raw)
+            has_image = True
+        else:
+            w_px, h_px, px_bytes = 0, 0, b""
+            has_image = False
 
         raw_map = g.get("pixel_mapping")
         if not isinstance(raw_map, list) or len(raw_map) != 4 or not all(_is_int(v) for v in raw_map):
@@ -599,13 +717,14 @@ def compile_project(
             name=gname,
             ident_upper=ident_u,
             ident_lower=ident_l,
-            image_rel=Path(img_rel).as_posix(),
+            image_rel=Path(img_rel).as_posix() if img_rel else "",
             image_path=img_path,
             pixel_mapping=mapping,
             width_px=w_px,
             height_px=h_px,
             pixels=px_bytes,
             palettes=palettes,
+            has_image=has_image,
             yaml_glyphs=yaml_glyphs,
         )
         groups.append(grp)
@@ -662,22 +781,73 @@ def compile_project(
         nb = bool(o.get("non-blockable", False))
         pick = bool(o.get("pickable", False))
         pf3 = bool(o.get("colpf3", False))
+        anim_speed = _req_int(
+            o.get("animation_speed", 0),
+            f"object '{oname}'.animation_speed",
+            min_val=0,
+            max_val=MAX_ANIMATION_SPEED,
+        )
 
-        reg = o.get("region")
-        if not isinstance(reg, Mapping):
-            raise RoomCompileError(f"Object '{oname}' missing valid 'region' mapping.")
-        rx = _req_int(reg.get("x"), f"object {oname}.region.x", min_val=0)
-        ry = _req_int(reg.get("y"), f"object {oname}.region.y", min_val=0)
-        rw = _req_int(reg.get("w"), f"object {oname}.region.w", min_val=1, max_val=MAX_OBJECT_CELLS)
-        rh = _req_int(reg.get("h"), f"object {oname}.region.h", min_val=1, max_val=MAX_OBJECT_CELLS)
-        if rw * rh > MAX_OBJECT_CELLS:
+        raw_frames = o.get("frames")
+        if not isinstance(raw_frames, list) or not raw_frames:
             raise RoomCompileError(
-                f"Object '{oname}' (ID {oid}) size {rw}x{rh}={rw * rh} exceeds {MAX_OBJECT_CELLS} cells."
+                f"Object '{oname}' (ID {oid}) missing valid non-empty 'frames' list."
             )
-        if rx + rw > grp.width_glyphs or ry + rh > grp.height_glyphs:
+        if len(raw_frames) > MAX_OBJECT_FRAMES:
             raise RoomCompileError(
-                f"Object '{oname}' (ID {oid}) region ({rx},{ry},{rw},{rh}) exceeds PNG glyph bounds "
-                f"{grp.width_glyphs}x{grp.height_glyphs} of group '{grp.name}'."
+                f"Object '{oname}' (ID {oid}) defines {len(raw_frames)} frames; "
+                f"maximum is {MAX_OBJECT_FRAMES}."
+            )
+
+        parsed_frames: list[CompiledFrame] = []
+        base_wh: tuple[int, int] | None = None
+        for f_idx, reg in enumerate(raw_frames):
+            if not isinstance(reg, Mapping):
+                raise RoomCompileError(
+                    f"Object '{oname}' frames[{f_idx}] must be a mapping."
+                )
+            rx = _req_int(reg.get("x"), f"object {oname}.frames[{f_idx}].x", min_val=0)
+            ry = _req_int(reg.get("y"), f"object {oname}.frames[{f_idx}].y", min_val=0)
+            rw = _req_int(
+                reg.get("w"),
+                f"object {oname}.frames[{f_idx}].w",
+                min_val=1,
+                max_val=MAX_OBJECT_CELLS,
+            )
+            rh = _req_int(
+                reg.get("h"),
+                f"object {oname}.frames[{f_idx}].h",
+                min_val=1,
+                max_val=MAX_OBJECT_CELLS,
+            )
+            if rw * rh > MAX_OBJECT_CELLS:
+                raise RoomCompileError(
+                    f"Object '{oname}' (ID {oid}) frame {f_idx} size {rw}x{rh}={rw * rh} "
+                    f"exceeds {MAX_OBJECT_CELLS} cells."
+                )
+            if base_wh is None:
+                base_wh = (rw, rh)
+            elif (rw, rh) != base_wh:
+                raise RoomCompileError(
+                    f"Object '{oname}' (ID {oid}) frame {f_idx} size {rw}x{rh} "
+                    f"differs from frame 0 size {base_wh[0]}x{base_wh[1]}."
+                )
+            if grp.has_image and (rx + rw > grp.width_glyphs or ry + rh > grp.height_glyphs):
+                raise RoomCompileError(
+                    f"Object '{oname}' (ID {oid}) frame {f_idx} ({rx},{ry},{rw},{rh}) "
+                    f"exceeds PNG glyph bounds {grp.width_glyphs}x{grp.height_glyphs} of group '{grp.name}'."
+                )
+            parsed_frames.append(CompiledFrame(x=rx, y=ry, w=rw, h=rh))
+
+        if anim_speed > 0 and len(parsed_frames) == 1:
+            warn(
+                "ANIM_SPEED_SINGLE_FRAME",
+                f"Object '{oname}' (ID {oid}) has animation_speed={anim_speed} with only 1 frame.",
+            )
+        elif anim_speed == 0 and len(parsed_frames) > 1:
+            warn(
+                "ANIM_FRAMES_SPEED_ZERO",
+                f"Object '{oname}' (ID {oid}) has {len(parsed_frames)} frames with animation_speed=0 (unused).",
             )
 
         obj = CompiledObject(
@@ -689,10 +859,8 @@ def compile_project(
             non_blockable=nb,
             pickable=pick,
             colpf3=pf3,
-            x=rx,
-            y=ry,
-            w=rw,
-            h=rh,
+            frames=parsed_frames,
+            animation_speed=anim_speed,
         )
         objects.append(obj)
         objects_by_id[oid] = obj
@@ -700,73 +868,462 @@ def compile_project(
     objects.sort(key=lambda obj: obj.id)
 
     # --- Build deterministic glyph tables per group (ascending object ID, row-major) ---
+    def _bytes_have_11(gb: bytes) -> bool:
+        for b in gb:
+            if (b & 0xC0) == 0xC0 or (b & 0x30) == 0x30 or (b & 0x0C) == 0x0C or (b & 0x03) == 0x03:
+                return True
+        return False
+
     for grp in groups:
         grp_objs = [obj for obj in objects if obj.group == grp.name]
         glyph_to_code: dict[bytes, int] = {}
+        static_unique_bytes: set[bytes] = set()
+        dedicated_slots_total = 0
         grp.glyphs = []
         grp.glyph_sources = []
+        grp.glyph_owners = []
+
+        # Pre-index dedicated entries from YAML glyphs (for PNG-optional animated compilation)
+        yaml_ded_by_obj: dict[int, list[tuple[int, bytes, tuple[tuple[int, int], ...], tuple[bytes, ...]]]] = {}
+        if grp.yaml_glyphs is not None:
+            for entry in grp.yaml_glyphs:
+                if isinstance(entry, Mapping) and ("object" in entry or "cells" in entry or "frames" in entry):
+                    try:
+                        d_oid = _req_int(entry.get("object"), f"{grp.name}.glyphs.object", min_val=1)
+                        d_code = _req_int(entry.get("code"), f"{grp.name}.glyphs.code", min_val=1, max_val=MAX_GLYPHS_PER_GROUP)
+                        cells_raw = entry.get("cells")
+                        frames_raw = entry.get("frames")
+                        if not isinstance(cells_raw, list) or not cells_raw:
+                            raise RoomCompileError(f"Group '{grp.name}' dedicated glyph missing 'cells': {entry!r}")
+                        if not isinstance(frames_raw, list) or len(frames_raw) < 2:
+                            raise RoomCompileError(f"Group '{grp.name}' dedicated glyph requires >=2 'frames': {entry!r}")
+                        d_cells = tuple(
+                            (
+                                _req_int(c[0], f"{grp.name}.glyphs.cells.x", min_val=0),
+                                _req_int(c[1], f"{grp.name}.glyphs.cells.y", min_val=0),
+                            )
+                            for c in cells_raw
+                        )
+                        d_frames = tuple(bytes.fromhex(str(fh).strip()) for fh in frames_raw)
+                        if any(len(fb) != GLYPH_BYTES for fb in d_frames):
+                            raise ValueError("bad frame glyph length")
+                        d_bytes = bytes.fromhex(str(entry.get("data", "")).strip())
+                        if len(d_bytes) != GLYPH_BYTES or d_bytes != d_frames[0]:
+                            raise ValueError("data does not match frames[0]")
+                        if len(set(d_frames)) < 2:
+                            raise ValueError("dedicated entry does not vary across frames")
+                    except RoomCompileError:
+                        raise
+                    except Exception as exc:
+                        raise RoomCompileError(
+                            f"Group '{grp.name}' malformed dedicated glyph entry {entry!r}: {exc}"
+                        ) from exc
+                    yaml_ded_by_obj.setdefault(d_oid, []).append((d_code, d_bytes, d_cells, d_frames))
 
         for obj in grp_objs:
-            raw_codes = bytearray()
-            any_11 = False
-            all_empty = True
-            for dy in range(obj.h):
-                for dx in range(obj.w):
-                    gx = obj.x + dx
-                    gy = obj.y + dy
-                    gbytes, cell_11 = _extract_glyph(grp.pixels, grp.width_px, gx, gy, grp.pixel_mapping)
-                    if gbytes == EMPTY_GLYPH_BYTES:
-                        raw_codes.append(0)
-                    else:
-                        all_empty = False
-                        if cell_11:
-                            any_11 = True
-                        code = glyph_to_code.get(gbytes)
-                        if code is None:
-                            code = len(grp.glyphs) + 1
-                            if code > MAX_GLYPHS_PER_GROUP:
+            if not obj.is_animated:
+                if not grp.has_image:
+                    raise RoomCompileError(
+                        f"Object group '{grp.name}': PNG file required for static object '{obj.name}' (ID {obj.id}), not found: '{grp.image_path.as_posix()}'."
+                    )
+                raw_codes = bytearray()
+                any_11 = False
+                all_empty = True
+                for dy in range(obj.h):
+                    for dx in range(obj.w):
+                        gx = obj.x + dx
+                        gy = obj.y + dy
+                        gbytes, cell_11 = _extract_glyph(grp.pixels, grp.width_px, gx, gy, grp.pixel_mapping)
+                        if gbytes == EMPTY_GLYPH_BYTES:
+                            raw_codes.append(0)
+                        else:
+                            all_empty = False
+                            static_unique_bytes.add(gbytes)
+                            if cell_11:
+                                any_11 = True
+                            code = glyph_to_code.get(gbytes)
+                            if code is None:
+                                code = len(grp.glyphs) + 1
+                                if code > MAX_GLYPHS_PER_GROUP:
+                                    raise RoomCompileError(
+                                        f"Object group '{grp.name}' exceeds {MAX_GLYPHS_PER_GROUP} unique glyphs "
+                                        f"(reached at object '{obj.name}' ID {obj.id})."
+                                    )
+                                glyph_to_code[gbytes] = code
+                                grp.glyphs.append(gbytes)
+                                grp.glyph_sources.append((gx, gy))
+                                grp.glyph_owners.append(None)
+                            raw_codes.append(code + 128 if obj.colpf3 else code)
+
+                if all_empty:
+                    raise RoomCompileError(
+                        f"Object '{obj.name}' (ID {obj.id}) consists solely of empty cells (code 0)."
+                    )
+                obj.cells = bytes(raw_codes)
+                obj.constant_cell_count = obj.w * obj.h
+                obj.varying_cell_count = 0
+                obj.has_pixel11 = any_11
+                if obj.colpf3 and not any_11:
+                    warn(
+                        "OBJECT_COLPF3_NO_EFFECT",
+                        f"Object '{obj.name}' (ID {obj.id}) has colpf3=true but no %11 pixels.",
+                    )
+            else:
+                # Animated object: classify cells (constant -> shared static pool, varying -> shared per-sequence dedicated slots)
+                if grp.has_image:
+                    cell_seqs: list[list[tuple[bytes, ...]]] = []
+                    for dy in range(obj.h):
+                        row_seqs: list[tuple[bytes, ...]] = []
+                        for dx in range(obj.w):
+                            seq = tuple(
+                                _extract_glyph(grp.pixels, grp.width_px, fr.x + dx, fr.y + dy, grp.pixel_mapping)[0]
+                                for fr in obj.frames
+                            )
+                            row_seqs.append(seq)
+                        cell_seqs.append(row_seqs)
+                else:
+                    # Reconstruct solely from YAML dedicated entries (allowed for animation-only groups with missing PNG)
+                    ded_yaml = yaml_ded_by_obj.get(obj.id)
+                    if not ded_yaml:
+                        raise RoomCompileError(
+                            f"Object group '{grp.name}': PNG '{grp.image_path.as_posix()}' missing and no dedicated YAML glyphs for animated object '{obj.name}' (ID {obj.id})."
+                        )
+                    cell_seqs = [[(EMPTY_GLYPH_BYTES,) * len(obj.frames) for _ in range(obj.w)] for _ in range(obj.h)]
+                    seen_coords: set[tuple[int, int]] = set()
+                    for _dcode, _dbytes, dcells, dframes in ded_yaml:
+                        if len(dframes) != len(obj.frames):
+                            raise RoomCompileError(
+                                f"Group '{grp.name}' dedicated glyph for object {obj.id} has {len(dframes)} frames, expected {len(obj.frames)}."
+                            )
+                        for cx, cy in dcells:
+                            if not (0 <= cx < obj.w and 0 <= cy < obj.h):
                                 raise RoomCompileError(
-                                    f"Object group '{grp.name}' exceeds {MAX_GLYPHS_PER_GROUP} unique glyphs "
-                                    f"(reached at object '{obj.name}' ID {obj.id})."
+                                    f"Group '{grp.name}' dedicated glyph cell ({cx}, {cy}) outside {obj.w}x{obj.h} of object {obj.id}."
                                 )
-                            glyph_to_code[gbytes] = code
-                            grp.glyphs.append(gbytes)
-                            grp.glyph_sources.append((gx, gy))
-                        raw_codes.append(code + 128 if obj.colpf3 else code)
+                            if (cx, cy) in seen_coords:
+                                raise RoomCompileError(
+                                    f"Group '{grp.name}' duplicate dedicated cell ({cx}, {cy}) on object {obj.id}."
+                                )
+                            seen_coords.add((cx, cy))
+                            cell_seqs[cy][cx] = dframes
 
-            if all_empty:
-                raise RoomCompileError(
-                    f"Object '{obj.name}' (ID {obj.id}) consists solely of empty cells (code 0)."
-                )
-            obj.cells = bytes(raw_codes)
-            obj.has_pixel11 = any_11
-            if obj.colpf3 and not any_11:
-                warn(
-                    "OBJECT_COLPF3_NO_EFFECT",
-                    f"Object '{obj.name}' (ID {obj.id}) has colpf3=true but no %11 pixels.",
-                )
+                seq_cells: dict[tuple[bytes, ...], list[tuple[int, int]]] = {}
+                cell_is_varying: list[list[bool]] = []
+                const_cnt = 0
+                vary_cnt = 0
+                has_non_empty = False
+                has_11 = False
 
-        if grp.yaml_glyphs is not None:
-            expected_entries = [
-                {"code": i + 1, "data": gb.hex().upper(), "src": [src[0], src[1]]}
-                for i, (gb, src) in enumerate(zip(grp.glyphs, grp.glyph_sources))
-            ]
+                for dy in range(obj.h):
+                    row_v: list[bool] = []
+                    for dx in range(obj.w):
+                        seq = cell_seqs[dy][dx]
+                        for gb in seq:
+                            if gb != EMPTY_GLYPH_BYTES:
+                                has_non_empty = True
+                                if _bytes_have_11(gb):
+                                    has_11 = True
+                        if len(set(seq)) == 1:
+                            row_v.append(False)
+                            const_cnt += 1
+                        else:
+                            row_v.append(True)
+                            vary_cnt += 1
+                            seq_cells.setdefault(seq, []).append((dx, dy))
+                    cell_is_varying.append(row_v)
+
+                if not has_non_empty:
+                    raise RoomCompileError(
+                        f"Object '{obj.name}' (ID {obj.id}) consists solely of empty cells in all frames."
+                    )
+
+                obj.constant_cell_count = const_cnt
+                obj.varying_cell_count = vary_cnt
+
+                seq_to_code: dict[tuple[bytes, ...], int] = {}
+                raw_codes_grid = [[0] * obj.w for _ in range(obj.h)]
+                slot_codes: list[int] = []
+                slot_frames: list[tuple[bytes, ...]] = []
+                slot_cells: list[tuple[tuple[int, int], ...]] = []
+
+                for dy in range(obj.h):
+                    for dx in range(obj.w):
+                        seq = cell_seqs[dy][dx]
+                        if not cell_is_varying[dy][dx]:
+                            gb = seq[0]
+                            if gb == EMPTY_GLYPH_BYTES:
+                                continue
+                            static_unique_bytes.add(gb)
+                            code = glyph_to_code.get(gb)
+                            if code is None:
+                                code = len(grp.glyphs) + 1
+                                if code > MAX_GLYPHS_PER_GROUP:
+                                    raise RoomCompileError(
+                                        f"Object group '{grp.name}' exceeds {MAX_GLYPHS_PER_GROUP} unique glyphs "
+                                        f"(reached at object '{obj.name}' ID {obj.id})."
+                                    )
+                                glyph_to_code[gb] = code
+                                grp.glyphs.append(gb)
+                                grp.glyph_sources.append((obj.x + dx, obj.y + dy))
+                                grp.glyph_owners.append(None)
+                            raw_codes_grid[dy][dx] = code + 128 if obj.colpf3 else code
+                        else:
+                            code = seq_to_code.get(seq)
+                            if code is None:
+                                code = len(grp.glyphs) + 1
+                                if code > MAX_GLYPHS_PER_GROUP:
+                                    raise RoomCompileError(
+                                        f"Object group '{grp.name}' exceeds {MAX_GLYPHS_PER_GROUP} glyphs "
+                                        f"(reached at animated object '{obj.name}' ID {obj.id})."
+                                    )
+                                seq_to_code[seq] = code
+                                cells_tuple = tuple(seq_cells[seq])
+                                grp.glyphs.append(seq[0])
+                                grp.glyph_sources.append(None)
+                                grp.glyph_owners.append((obj.id, cells_tuple, seq))
+                                dedicated_slots_total += 1
+                                slot_codes.append(code)
+                                slot_frames.append(seq)
+                                slot_cells.append(cells_tuple)
+                            raw_codes_grid[dy][dx] = code + 128 if obj.colpf3 else code
+
+                obj.dedicated_slot_codes = slot_codes
+                obj.dedicated_slot_frames = slot_frames
+                obj.dedicated_slot_cells = slot_cells
+                obj.cells = bytes(c for row in raw_codes_grid for c in row)
+                obj.has_pixel11 = has_11
+
+                if obj.colpf3 and not has_11:
+                    warn(
+                        "OBJECT_COLPF3_NO_EFFECT",
+                        f"Object '{obj.name}' (ID {obj.id}) has colpf3=true but no %11 pixels.",
+                    )
+                if vary_cnt == 0:
+                    warn(
+                        "ANIM_NO_VARYING_CELLS",
+                        f"Object '{obj.name}' (ID {obj.id}): animated object without any varying cell (all frames identical).",
+                    )
+
+        grp.static_glyph_count = len(static_unique_bytes)
+        grp.dedicated_slot_count = dedicated_slots_total
+
+        if grp.yaml_glyphs is not None and grp.has_image:
+            expected_entries: list[dict[str, Any]] = []
+            for i, (gb, src, owner) in enumerate(
+                zip(grp.glyphs, grp.glyph_sources, grp.glyph_owners)
+            ):
+                if owner is not None:
+                    oid_own, cells_t, frames_t = owner
+                    expected_entries.append(
+                        {
+                            "kind": "ded",
+                            "code": i + 1,
+                            "data": gb.hex().upper(),
+                            "object": oid_own,
+                            "cells": [[cx, cy] for cx, cy in cells_t],
+                            "frames": [fb.hex().upper() for fb in frames_t],
+                        }
+                    )
+                else:
+                    assert src is not None
+                    expected_entries.append(
+                        {"kind": "src", "code": i + 1, "data": gb.hex().upper(), "src": [src[0], src[1]]}
+                    )
             actual_entries: list[dict[str, Any]] = []
             for entry in grp.yaml_glyphs:
                 if isinstance(entry, Mapping):
-                    actual_entries.append(
-                        {
-                            "code": entry.get("code"),
-                            "data": str(entry.get("data", "")).upper(),
-                            "src": list(entry.get("src") or []),
-                        }
-                    )
+                    if "object" in entry or "cells" in entry or "frames" in entry:
+                        actual_entries.append(
+                            {
+                                "kind": "ded",
+                                "code": entry.get("code"),
+                                "data": str(entry.get("data", "")).upper(),
+                                "object": entry.get("object"),
+                                "cells": [list(c) for c in (entry.get("cells") or [])],
+                                "frames": [str(fh).strip().upper() for fh in (entry.get("frames") or [])],
+                            }
+                        )
+                    else:
+                        actual_entries.append(
+                            {
+                                "kind": "src",
+                                "code": entry.get("code"),
+                                "data": str(entry.get("data", "")).upper(),
+                                "src": list(entry.get("src") or []),
+                            }
+                        )
             if actual_entries != expected_entries:
                 warn(
                     "GLYPH_TABLE_MISMATCH",
-                    f"Group '{grp.name}' YAML glyphs table differs from computed PNG glyphs "
+                    f"Group '{grp.name}' YAML glyphs table differs from computed glyphs "
                     f"(computed {len(expected_entries)} glyph(s), stored {len(actual_entries)}).",
                 )
+
+    # --- Assign animated objects, pack 8-byte pattern pools (<=256/bank), choose Form 1 vs Form 2 ---
+    MAX_PATTERNS_PER_BANK = 256
+    ANIM_FLAG_FORM2 = 0x80
+    ANIM_BANK_MASK = 0x7F
+
+    anim_objs = [obj for obj in objects if obj.is_animated and obj.dedicated_slot_count > 0]
+    pool_banks: list[list[bytes]] = []
+    pool_bank_maps: list[dict[bytes, int]] = []
+    obj_bank_idx: dict[int, int] = {}
+
+    for anim_idx, obj in enumerate(anim_objs):
+        obj.anim_index = anim_idx
+        obj_pats_ordered: list[bytes] = []
+        seen_op: set[bytes] = set()
+        for f_idx in range(len(obj.frames)):
+            for s_idx in range(obj.dedicated_slot_count):
+                pb = obj.dedicated_slot_frames[s_idx][f_idx]
+                if pb not in seen_op:
+                    seen_op.add(pb)
+                    obj_pats_ordered.append(pb)
+
+        if len(obj_pats_ordered) > MAX_PATTERNS_PER_BANK:
+            raise RoomCompileError(
+                f"Animated object '{obj.name}' (ID {obj.id}) uses {len(obj_pats_ordered)} distinct 8-byte patterns, "
+                f"exceeding the {MAX_PATTERNS_PER_BANK}-pattern bank limit."
+            )
+
+        chosen_bank: int | None = None
+        for b_idx, b_map in enumerate(pool_bank_maps):
+            added = sum(1 for p in obj_pats_ordered if p not in b_map)
+            if len(b_map) + added <= MAX_PATTERNS_PER_BANK:
+                chosen_bank = b_idx
+                break
+        if chosen_bank is None:
+            chosen_bank = len(pool_banks)
+            pool_banks.append([])
+            pool_bank_maps.append({})
+
+        b_list = pool_banks[chosen_bank]
+        b_map = pool_bank_maps[chosen_bank]
+        for p in obj_pats_ordered:
+            if p not in b_map:
+                b_map[p] = len(b_list)
+                b_list.append(p)
+        obj_bank_idx[obj.id] = chosen_bank
+
+    if len(pool_banks) > 128:
+        raise RoomCompileError(f"Too many animation pattern banks ({len(pool_banks)}; max 128).")
+
+    scodes_blocks: list[tuple[str, bytes]] = []
+    scodes_by_bytes: dict[bytes, str] = {}
+    f1_blocks: list[tuple[str, bytes]] = []
+    f1_by_bytes: dict[bytes, str] = {}
+    delta_blocks: list[tuple[str, bytes]] = []
+    delta_by_bytes: dict[bytes, str] = {}
+    f2_headers: list[tuple[str, bytes, list[str]]] = []
+    f2_by_key: dict[tuple[bytes, tuple[str, ...]], str] = {}
+
+    animations: list[CompiledAnimation] = []
+    anim_stats: list[AnimObjectStats] = []
+    anim_frame_raw_bytes = 0
+    anim_frame_dedup_bytes = 0
+
+    for obj in anim_objs:
+        assert obj.anim_index is not None
+        grp = groups_by_name[obj.group]
+        b_idx = obj_bank_idx[obj.id]
+        b_map = pool_bank_maps[b_idx]
+        F = len(obj.frames)
+        S = obj.dedicated_slot_count
+
+        # Build seq_matrix[f][s] -> 8-bit pattern index in bank b_idx
+        seq_matrix = [
+            [b_map[obj.dedicated_slot_frames[s][f]] for s in range(S)]
+            for f in range(F)
+        ]
+
+        scodes_payload = bytes(obj.dedicated_slot_codes)
+        sc_lbl = scodes_by_bytes.get(scodes_payload)
+        if sc_lbl is None:
+            sc_lbl = f"anim_scodes_{len(scodes_blocks)}"
+            scodes_by_bytes[scodes_payload] = sc_lbl
+            scodes_blocks.append((sc_lbl, scodes_payload))
+
+        # Form 1: frame-major S * F pattern indexes
+        f1_payload = bytes(seq_matrix[f][s] for f in range(F) for s in range(S))
+        size_f1 = len(f1_payload)
+
+        # Form 2: frame 0 patterns (S) + F delta pointers (2*F) + cyclic delta blocks
+        frame_deltas: list[bytes] = []
+        for k in range(F):
+            prev = (k - 1) % F
+            pairs = [
+                (s, seq_matrix[k][s])
+                for s in range(S)
+                if seq_matrix[k][s] != seq_matrix[prev][s]
+            ]
+            d_bytes = bytes([len(pairs)] + [v for pair in pairs for v in pair])
+            frame_deltas.append(d_bytes)
+        size_f2 = S + 2 * F + sum(len(d) for d in frame_deltas)
+
+        use_form2 = size_f2 < size_f1  # tie -> Form 1
+        naive_bytes = GLYPH_BYTES * S * F
+        anim_frame_raw_bytes += naive_bytes
+
+        if use_form2:
+            d_labels: list[str] = []
+            for d_bytes in frame_deltas:
+                dlbl = delta_by_bytes.get(d_bytes)
+                if dlbl is None:
+                    dlbl = f"anim_d_{len(delta_blocks)}"
+                    delta_by_bytes[d_bytes] = dlbl
+                    delta_blocks.append((dlbl, d_bytes))
+                d_labels.append(dlbl)
+            f0_pat_bytes = bytes(seq_matrix[0])
+            f2_key = (f0_pat_bytes, tuple(d_labels))
+            data_lbl = f2_by_key.get(f2_key)
+            if data_lbl is None:
+                data_lbl = f"anim_f2_{len(f2_headers)}"
+                f2_by_key[f2_key] = data_lbl
+                f2_headers.append((data_lbl, f0_pat_bytes, d_labels))
+            encoded_bytes = size_f2
+        else:
+            data_lbl = f1_by_bytes.get(f1_payload)
+            if data_lbl is None:
+                data_lbl = f"anim_f1_{len(f1_blocks)}"
+                f1_by_bytes[f1_payload] = data_lbl
+                f1_blocks.append((data_lbl, f1_payload))
+            encoded_bytes = size_f1
+
+        anim_frame_dedup_bytes += encoded_bytes
+        flags_byte = (ANIM_FLAG_FORM2 if use_form2 else 0) | (b_idx & ANIM_BANK_MASK)
+        animations.append(
+            CompiledAnimation(
+                index=obj.anim_index,
+                obj=obj,
+                group_ident_lower=grp.ident_lower,
+                speed=obj.animation_speed,
+                frame_count=F,
+                slot_count=S,
+                bank_index=b_idx,
+                use_form2=use_form2,
+                flags_byte=flags_byte,
+                scodes_label=sc_lbl,
+                data_label=data_lbl,
+                encoded_bytes=encoded_bytes,
+                naive_bytes=naive_bytes,
+            )
+        )
+        anim_stats.append(
+            AnimObjectStats(
+                anim_idx=obj.anim_index,
+                object_id=obj.id,
+                name=obj.name,
+                frame_count=F,
+                constant_cells=obj.constant_cell_count,
+                varying_cells=obj.varying_cell_count,
+                slot_count=S,
+                speed=obj.animation_speed,
+                bank_index=b_idx,
+                form="form2" if use_form2 else "form1",
+                encoded_bytes=encoded_bytes,
+                naive_bytes=naive_bytes,
+            )
+        )
 
     # --- Deduplicate object cell blocks ---
     cell_block_by_bytes: dict[bytes, str] = {}
@@ -914,12 +1471,18 @@ def compile_project(
                             if code == 0:
                                 continue
                             cx = bx + dx
-                            if row_grp_name != obj.group and oid not in mismatch_reported:
-                                mismatch_reported.add(oid)
-                                warn(
-                                    "OBJECT_ROW_GROUP_MISMATCH",
-                                    f"Room '{rname}': object '{obj.name}' (group '{obj.group}') used in row {cy} ('{row_grp_name}').",
-                                )
+                            if row_grp_name != obj.group:
+                                if obj.is_animated:
+                                    raise RoomCompileError(
+                                        f"Room '{rname}': animated object '{obj.name}' (ID {oid}, group '{obj.group}') "
+                                        f"placed in row {cy} assigned to foreign group '{row_grp_name}'."
+                                    )
+                                if oid not in mismatch_reported:
+                                    mismatch_reported.add(oid)
+                                    warn(
+                                        "OBJECT_ROW_GROUP_MISMATCH",
+                                        f"Room '{rname}': object '{obj.name}' (group '{obj.group}') used in row {cy} ('{row_grp_name}').",
+                                    )
                             if not obj.non_blockable:
                                 prev_id = blockable_occupied.get((cx, cy))
                                 if prev_id is not None:
@@ -1038,9 +1601,44 @@ def compile_project(
 
     inst_blocks: list[tuple[str, bytes]] = []
     inst_block_by_bytes: dict[bytes, str] = {}
+    anim_lists: list[tuple[str, list[int]]] = []
+    anim_list_by_seq: dict[tuple[int, ...], str] = {}
+    max_room_anims = 0
+    max_room_anim_slots = 0
+    max_room_form1_slots = 0
     room_stats: list[RoomSizeStats] = []
 
     for room in rooms:
+        room_anim_set: set[int] = set()
+        for inst in room.ordered_placed:
+            a_idx = objects_by_id[inst.object_id].anim_index
+            if a_idx is not None:
+                room_anim_set.add(a_idx)
+        room.anim_indices = sorted(room_anim_set)
+        if room.anim_indices:
+            aseq = tuple(room.anim_indices)
+            albl = anim_list_by_seq.get(aseq)
+            if albl is None:
+                albl = f"room_anim_list_{len(anim_lists)}"
+                anim_list_by_seq[aseq] = albl
+                anim_lists.append((albl, list(room.anim_indices)))
+            room.anim_list_label = albl
+            max_room_anims = max(max_room_anims, len(room.anim_indices))
+            max_room_anim_slots = max(
+                max_room_anim_slots,
+                sum(animations[a_idx].slot_count for a_idx in room.anim_indices),
+            )
+            max_room_form1_slots = max(
+                max_room_form1_slots,
+                sum(
+                    animations[a_idx].slot_count
+                    for a_idx in room.anim_indices
+                    if not animations[a_idx].use_form2
+                ),
+            )
+        else:
+            room.anim_list_label = ""
+
         payload = encode_instance_block(room.ordered_placed)
         if payload:
             lbl = inst_block_by_bytes.get(payload)
@@ -1197,7 +1795,12 @@ def compile_project(
     files: dict[str, str] = {}
 
     # 1. rooms_defs.asm (equates only, 0 bytes)
-    defs_lines = _make_header("ROOMS_DEFS.ASM", source_label, input_hash, ("Equates only (0 emitted bytes).",))
+    defs_lines = _make_header(
+        "ROOMS_DEFS.ASM",
+        source_label,
+        input_hash,
+        ("Equates only (0 emitted bytes). PAL only (50 Hz VBLANK ticks).",),
+    )
     defs_lines.extend(
         [
             "; --- Grid & Engine Limits ---",
@@ -1215,6 +1818,15 @@ def compile_project(
             f"TAG_COUNT               = {len(tags)}",
             f"TAG_PLANE_COUNT         = {tag_plane_count}",
             f"TELEPORT_COUNT          = {len(teleports)}",
+            f"ANIM_COUNT              = {len(animations)}",
+            f"ANIM_POOL_COUNT         = {len(pool_banks)}",
+            f"ANIM_PATTERN_COUNT      = {sum(len(b) for b in pool_banks)}",
+            f"MAX_ROOM_ANIMS          = {max_room_anims}",
+            f"MAX_ROOM_ANIM_SLOTS     = {max_room_anim_slots}",
+            f"MAX_ROOM_FORM1_SLOTS    = {max_room_form1_slots}",
+            "ANIM_PAL_HZ             = 50",
+            "ANIM_FLAG_FORM2         = $80",
+            "ANIM_BANK_MASK          = $7F",
             "",
             "; --- Bit Flags & Masks ---",
             f"OBJ_FLAG_NON_BLOCKABLE  = ${OBJ_FLAG_NON_BLOCKABLE:02X}",
@@ -1259,6 +1871,14 @@ def compile_project(
         for obj in objects:
             defs_lines.append(f"OBJ_{obj.ident_upper:<19s} = {obj.id} ; '{obj.name}'")
         defs_lines.append("")
+    if animations:
+        defs_lines.append("; --- Animated Object Indexes (0..ANIM_COUNT-1, PAL 50 Hz) ---")
+        for anim in animations:
+            defs_lines.append(
+                f"ANIM_{anim.obj.ident_upper:<18s} = {anim.index} ; obj #{anim.obj.id} '{anim.obj.name}' "
+                f"({anim.frame_count}f x {anim.slot_count}s @ {anim.speed})"
+            )
+        defs_lines.append("")
     if rooms:
         defs_lines.append("; --- Room IDs (1..ROOM_MAX_ID) ---")
         for room in rooms:
@@ -1275,6 +1895,7 @@ def compile_project(
         input_hash,
         (
             "ANTIC Mode 4 character sets (1024 bytes per object group).",
+            "Dedicated animated object slots contain frame 0 bitmap data at boot.",
             "ALIGNMENT: ANTIC CHBASE requires each charset on a 1 KB ($0400) boundary.",
             "Place in a 1 KB-aligned segment (e.g. org $4000) or assemble with -d:ROOMS_ALIGN_CHARSETS=1.",
         ),
@@ -1286,14 +1907,19 @@ def compile_project(
         else:
             cs_lines.extend(["    .ifdef ROOMS_ALIGN_CHARSETS", "        .align $400", "    .endif"])
         cs_lines.append(
-            f"charset_{grp.ident_lower} ; group '{grp.name}' ({len(grp.glyphs)}/{MAX_GLYPHS_PER_GROUP} glyphs)"
+            f"charset_{grp.ident_lower} ; group '{grp.name}' ({len(grp.glyphs)}/{MAX_GLYPHS_PER_GROUP} glyphs: "
+            f"static={grp.static_glyph_count}, dedicated={grp.dedicated_slot_count})"
         )
         # Emit all 128 glyphs x 8 bytes = 1024 bytes
         cs_lines.append("    .byte $00, $00, $00, $00, $00, $00, $00, $00 ; glyph $00 (reserved empty)")
         for code in range(1, 128):
             if code <= len(grp.glyphs):
                 gb = grp.glyphs[code - 1]
-                note = f"glyph ${code:02X}"
+                owner = grp.glyph_owners[code - 1]
+                if owner is not None:
+                    note = f"glyph ${code:02X} (dedicated obj #{owner[0]} cell {owner[1]},{owner[2]} frame 0)"
+                else:
+                    note = f"glyph ${code:02X}"
             else:
                 gb = EMPTY_GLYPH_BYTES
                 note = f"glyph ${code:02X} (unused)"
@@ -1345,6 +1971,7 @@ def compile_project(
     obj_w_arr = [0] * obj_max_id
     obj_h_arr = [0] * obj_max_id
     obj_flags_arr = [0] * obj_max_id
+    obj_anim_arr = [0] * obj_max_id
     obj_data_lo_arr: list[int | str] = [0] * obj_max_id
     obj_data_hi_arr: list[int | str] = [0] * obj_max_id
     obj_tag_planes: list[list[int]] = [[0] * obj_max_id for _ in range(tag_plane_count)]
@@ -1354,6 +1981,7 @@ def compile_project(
         obj_w_arr[slot] = obj.w
         obj_h_arr[slot] = obj.h
         obj_flags_arr[slot] = obj.flags
+        obj_anim_arr[slot] = (obj.anim_index + 1) if obj.anim_index is not None else 0
         obj_data_lo_arr[slot] = f"<{obj.cell_block_name}"
         obj_data_hi_arr[slot] = f">{obj.cell_block_name}"
         for t in obj.tags:
@@ -1368,6 +1996,12 @@ def compile_project(
         "obj_flags",
         obj_flags_arr,
         "Object flags (bit 0 = non-blockable, bit 1 = colpf3, bit 2 = pickable)",
+    )
+    obj_bytes += _emit_id_table(
+        obj_lines,
+        "obj_anim",
+        obj_anim_arr,
+        "Animation index + 1 (0 = static object, 1..ANIM_COUNT = anim_idx + 1)",
     )
     for p_idx, plane_vals in enumerate(obj_tag_planes):
         obj_bytes += _emit_id_table(
@@ -1415,6 +2049,9 @@ def compile_project(
     r_rep_cnt = [0] * room_max_id
     r_inst_lo: list[int | str] = [0] * room_max_id
     r_inst_hi: list[int | str] = [0] * room_max_id
+    r_anim_cnt = [0] * room_max_id
+    r_anim_lo: list[int | str] = [0] * room_max_id
+    r_anim_hi: list[int | str] = [0] * room_max_id
 
     for room in rooms:
         slot = room.id - 1
@@ -1438,6 +2075,13 @@ def compile_project(
         else:
             r_inst_lo[slot] = 0
             r_inst_hi[slot] = 0
+        r_anim_cnt[slot] = len(room.anim_indices)
+        if room.anim_list_label:
+            r_anim_lo[slot] = f"<{room.anim_list_label}"
+            r_anim_hi[slot] = f">{room.anim_list_label}"
+        else:
+            r_anim_lo[slot] = 0
+            r_anim_hi[slot] = 0
 
     rm_bytes = 0
     rm_bytes += _emit_id_table(rm_lines, "room_left", r_left, "Left neighbour room ID (0 = none)")
@@ -1462,12 +2106,25 @@ def compile_project(
     )
     rm_bytes += _emit_id_table(rm_lines, "room_inst_lo", r_inst_lo, "Room instance SoA block lo pointer")
     rm_bytes += _emit_id_table(rm_lines, "room_inst_hi", r_inst_hi, "Room instance SoA block hi pointer")
+    rm_bytes += _emit_id_table(
+        rm_lines, "room_anim_count", r_anim_cnt, "Unique animated objects in room (0..ANIM_COUNT)"
+    )
+    rm_bytes += _emit_id_table(rm_lines, "room_anim_lo", r_anim_lo, "Room animated object index list lo pointer")
+    rm_bytes += _emit_id_table(rm_lines, "room_anim_hi", r_anim_hi, "Room animated object index list hi pointer")
 
     if rowstyle_tables:
         rm_lines.append("; --- Deduplicated 24-byte per-row style tables ---")
         for lbl, seq in rowstyle_tables:
             rm_lines.append(f"{lbl} ; 24 rows")
             rm_lines.append(_format_bytes(seq, per_line=12))
+            rm_bytes += len(seq)
+        rm_lines.append("")
+
+    if anim_lists:
+        rm_lines.append("; --- Deduplicated per-room unique animated-object index lists ---")
+        for lbl, seq in anim_lists:
+            rm_lines.append(f"{lbl} ; {len(seq)} anim(s)")
+            rm_lines.append(_format_bytes(seq))
             rm_bytes += len(seq)
         rm_lines.append("")
 
@@ -1509,11 +2166,107 @@ def compile_project(
     files["teleports.asm"] = "\n".join(tp_lines)
     section_bytes["teleports.asm"] = tp_bytes
 
+    # 7. animations.asm (0-indexed SoA by anim_idx 0..ANIM_COUNT-1; PAL only)
+    anim_lines = _make_header(
+        "ANIMATIONS.ASM",
+        source_label,
+        input_hash,
+        (
+            "Animated object metadata, Form 1/Form 2 animation sequences, and 8-plane pattern pool.",
+            "PAL ONLY: anim_speed is measured in PAL VBLANK ticks (1/50 s; 50 = 1.00 s).",
+            "Constant cells use the static pool; only varying cells occupy dedicated slots.",
+        ),
+    )
+    anim_fields: list[tuple[str, Sequence[int | str]]] = [
+        ("anim_speed", [a.speed for a in animations]),
+        ("anim_frames", [a.frame_count for a in animations]),
+        ("anim_slots", [a.slot_count for a in animations]),
+        ("anim_chbase", [f">charset_{a.group_ident_lower}" for a in animations]),
+        ("anim_flags", [a.flags_byte for a in animations]),
+        ("anim_scodes_lo", [f"<{a.scodes_label}" for a in animations]),
+        ("anim_scodes_hi", [f">{a.scodes_label}" for a in animations]),
+        ("anim_data_lo", [f"<{a.data_label}" for a in animations]),
+        ("anim_data_hi", [f">{a.data_label}" for a in animations]),
+    ]
+    anim_bytes = 0
+    for lbl, seq in anim_fields:
+        anim_lines.append(lbl)
+        if seq:
+            for i in range(0, len(seq), 16):
+                chunk = seq[i : i + 16]
+                formatted = [v if isinstance(v, str) else f"${v:02X}" for v in chunk]
+                anim_lines.append(f"    .byte {', '.join(formatted)}")
+            anim_bytes += len(seq)
+        else:
+            anim_lines.append("    ; (0 animated objects)")
+    anim_lines.append("")
+
+    if scodes_blocks:
+        anim_lines.append("; --- Per-object dedicated base glyph code tables (1..127) ---")
+        for lbl, payload in scodes_blocks:
+            anim_lines.append(f"{lbl} ; {len(payload)} slot(s)")
+            anim_lines.append(_format_bytes(payload))
+            anim_bytes += len(payload)
+        anim_lines.append("")
+
+    if f1_blocks:
+        anim_lines.append("; --- Form 1: frame-major sequence tables [frame][slot] -> pat_idx ---")
+        for lbl, payload in f1_blocks:
+            anim_lines.append(f"{lbl} ; {len(payload)} B")
+            anim_lines.append(_format_bytes(payload))
+            anim_bytes += len(payload)
+        anim_lines.append("")
+
+    if f2_headers:
+        anim_lines.append("; --- Form 2: frame 0 patterns (S B) + [<delta_0..F-1][>delta_0..F-1] ---")
+        for lbl, f0_pats, d_labels in f2_headers:
+            anim_lines.append(f"{lbl} ; {len(f0_pats)} slot(s), {len(d_labels)} frame(s)")
+            anim_lines.append(_format_bytes(f0_pats))
+            anim_lines.append("    .byte " + ", ".join(f"<{dl}" for dl in d_labels))
+            anim_lines.append("    .byte " + ", ".join(f">{dl}" for dl in d_labels))
+            anim_bytes += len(f0_pats) + 2 * len(d_labels)
+        anim_lines.append("")
+
+    if delta_blocks:
+        anim_lines.append("; --- Form 2 delta blocks: [count, slot_0, pat_0, ...] ---")
+        for lbl, payload in delta_blocks:
+            anim_lines.append(f"{lbl} ; {len(payload)} B ({payload[0]} pair(s))")
+            anim_lines.append(_format_bytes(payload))
+            anim_bytes += len(payload)
+        anim_lines.append("")
+
+    pool_bytes = 0
+    if pool_banks:
+        anim_lines.append("; --- Deduplicated 8-byte pattern pool (8 byte planes per bank, <=256 pats/bank) ---")
+        for b_idx, bank_pats in enumerate(pool_banks):
+            anim_lines.append(f"; Pool bank {b_idx}: {len(bank_pats)} pattern(s)")
+            for row in range(GLYPH_BYTES):
+                anim_lines.append(f"anim_pool{b_idx}_b{row}")
+                plane = bytes(p[row] for p in bank_pats)
+                anim_lines.append(_format_bytes(plane))
+                pool_bytes += len(plane)
+                anim_bytes += len(plane)
+        if len(pool_banks) > 1:
+            anim_lines.append("anim_pb_lo")
+            for b_idx in range(len(pool_banks)):
+                anim_lines.append("    .byte " + ", ".join(f"<anim_pool{b_idx}_b{row}" for row in range(GLYPH_BYTES)))
+                pool_bytes += GLYPH_BYTES
+                anim_bytes += GLYPH_BYTES
+            anim_lines.append("anim_pb_hi")
+            for b_idx in range(len(pool_banks)):
+                anim_lines.append("    .byte " + ", ".join(f">anim_pool{b_idx}_b{row}" for row in range(GLYPH_BYTES)))
+                pool_bytes += GLYPH_BYTES
+                anim_bytes += GLYPH_BYTES
+        anim_lines.append("")
+
+    files["animations.asm"] = "\n".join(anim_lines)
+    section_bytes["animations.asm"] = anim_bytes
+
     # --- Compute ID-gap waste statistics ---
     obj_id_gaps = obj_max_id - len(objects)
     room_id_gaps = room_max_id - len(rooms)
-    obj_id_table_count = 5 + tag_plane_count  # w, h, flags, data_lo, data_hi + tag planes
-    room_id_table_count = 11  # left, right, up, down, flags, rowstyle_lo/hi, inst_count, rep_count, inst_lo/hi
+    obj_id_table_count = 6 + tag_plane_count  # w, h, flags, anim, data_lo, data_hi + tag planes
+    room_id_table_count = 14  # left, right, up, down, flags, rowstyle_lo/hi, inst_cnt, rep_cnt, inst_lo/hi, anim_cnt, anim_lo/hi
     id_gap_wasted_bytes = (obj_id_gaps * obj_id_table_count) + (room_id_gaps * room_id_table_count)
 
     report = CompileReport(
@@ -1521,6 +2274,10 @@ def compile_project(
         input_hash=input_hash,
         charset_count=len(groups),
         group_glyph_usage=[(g.name, len(g.glyphs)) for g in groups],
+        group_glyph_breakdown=[
+            (g.name, len(g.glyphs), g.static_glyph_count, g.dedicated_slot_count)
+            for g in groups
+        ],
         style_count=len(styles),
         tag_count=len(tags),
         tag_plane_count=tag_plane_count,
@@ -1529,6 +2286,16 @@ def compile_project(
         object_id_gaps=obj_id_gaps,
         object_cell_raw_bytes=raw_cell_bytes,
         object_cell_dedup_bytes=dedup_cell_bytes,
+        anim_count=len(animations),
+        anim_pool_count=len(pool_banks),
+        anim_pattern_count=sum(len(b) for b in pool_banks),
+        anim_pool_bytes=pool_bytes,
+        max_room_anims=max_room_anims,
+        max_room_anim_slots=max_room_anim_slots,
+        max_room_form1_slots=max_room_form1_slots,
+        anim_stats=anim_stats,
+        anim_frame_raw_bytes=anim_frame_raw_bytes,
+        anim_frame_dedup_bytes=anim_frame_dedup_bytes,
         room_count=len(rooms),
         room_max_id=room_max_id,
         room_id_gaps=room_id_gaps,
@@ -1594,9 +2361,9 @@ def compile_rooms(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compile room editor YAML v4 + PNGs into compact MADS 6502 assembly."
+        description="Compile room editor YAML v5 projects into compact MADS 6502 assembly."
     )
-    parser.add_argument("input_yaml", type=Path, help="Input rooms YAML project file (version 4).")
+    parser.add_argument("input_yaml", type=Path, help="Input rooms YAML project file (version 5).")
     parser.add_argument(
         "--out",
         type=Path,

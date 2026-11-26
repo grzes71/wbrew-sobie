@@ -96,8 +96,8 @@ SKCTL       = $D20F     ; Kontrola portu szeregowego i reset POKEY
 RTCLOK      = $0012     ; Licznik klatek VBLANK (3 bajty: $12, $13, $14)
 ATRACT      = $004D     ; Rejestr Attract Mode (0 = wyłączony)
 VDSLST      = $0200     ; Wektor przerwania DLI
-VVBLKD      = $0222     ; Wektor VBI Deferred
-VVBLKI      = $0224     ; Wektor VBI Immediate
+VVBLKI      = $0222     ; Wektor VBI Immediate
+VVBLKD      = $0224     ; Wektor VBI Deferred
 SDMCTL      = $022F     ; Cień DMACTL
 SDLSTL      = $0230     ; Cień DLISTL
 SDLSTH      = $0231     ; Cień DLISTH

@@ -7,7 +7,12 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Literal
 
-from room_editor.model.glyphs import IndexedImage, StampRegion
+from room_editor.model.glyphs import (
+    MAX_ANIMATION_SPEED,
+    MAX_OBJECT_FRAMES,
+    IndexedImage,
+    StampRegion,
+)
 from room_editor.model.palette import NamedPalette, Palette
 from room_editor.model.project import (
     GameObject,
@@ -798,10 +803,18 @@ class UpdateObjectCommand(Command):
         pickable: bool | None = None,
         colpf3: bool | None = None,
         region: StampRegion | None = None,
+        frames: list[StampRegion] | None = None,
+        animation_speed: int | None = None,
     ) -> None:
         self.description = f"Update object '{obj.name}'"
         self._project = project
         self._obj = obj
+        if frames is not None:
+            new_frames = list(frames)
+        elif region is not None:
+            new_frames = [region] + list(obj.frames[1:])
+        else:
+            new_frames = list(obj.frames)
         self._old_state = (
             obj.id,
             obj.name,
@@ -810,7 +823,8 @@ class UpdateObjectCommand(Command):
             obj.non_blockable,
             obj.pickable,
             obj.colpf3,
-            obj.region,
+            list(obj.frames),
+            int(obj.animation_speed),
         )
         self._new_state = (
             obj.id if id is None else int(id),
@@ -820,15 +834,16 @@ class UpdateObjectCommand(Command):
             obj.non_blockable if non_blockable is None else bool(non_blockable),
             obj.pickable if pickable is None else bool(pickable),
             obj.colpf3 if colpf3 is None else bool(colpf3),
-            obj.region if region is None else region,
+            new_frames,
+            int(obj.animation_speed if animation_speed is None else animation_speed),
         )
 
     def _apply(
         self,
-        state: tuple[int, str, str, list[str], bool, bool, bool, StampRegion],
+        state: tuple[int, str, str, list[str], bool, bool, bool, list[StampRegion], int],
         prev_id: int,
     ) -> None:
-        nid, nname, ngroup, ntags, nnb, npick, ncolpf3, nregion = state
+        nid, nname, ngroup, ntags, nnb, npick, ncolpf3, nframes, nspeed = state
         self._obj.id = nid
         self._obj.name = nname
         self._obj.group = ngroup
@@ -836,7 +851,8 @@ class UpdateObjectCommand(Command):
         self._obj.non_blockable = nnb
         self._obj.pickable = npick
         self._obj.colpf3 = ncolpf3
-        self._obj.region = nregion
+        self._obj.frames = list(nframes)
+        self._obj.animation_speed = nspeed
         if prev_id != nid:
             for room in self._project.rooms:
                 for inst in room.instances:
@@ -849,6 +865,119 @@ class UpdateObjectCommand(Command):
 
     def undo(self) -> None:
         self._apply(self._old_state, self._new_state[0])
+
+
+class AddObjectFrameCommand(Command):
+    """Append a new animation frame to a GameObject."""
+
+    def __init__(self, project: Project, obj: GameObject, region: StampRegion) -> None:
+        self.description = f"Add frame to '{obj.name}'"
+        self._project = project
+        self._obj = obj
+        self._old_frames = list(obj.frames)
+        if len(obj.frames) >= MAX_OBJECT_FRAMES:
+            raise ValueError(f"Object '{obj.name}' already has the maximum {MAX_OBJECT_FRAMES} frames.")
+        if obj.frames and (region.w, region.h) != (obj.w, obj.h):
+            raise ValueError(
+                f"Frame size {region.w}x{region.h} does not match object size {obj.w}x{obj.h}."
+            )
+        self._new_frames = list(obj.frames) + [region]
+
+    def execute(self) -> None:
+        self._obj.frames = list(self._new_frames)
+        self._project.rebuild_glyph_tables()
+
+    def undo(self) -> None:
+        self._obj.frames = list(self._old_frames)
+        self._project.rebuild_glyph_tables()
+
+
+class RemoveObjectFrameCommand(Command):
+    """Remove a frame from a GameObject (keeping at least 1 frame; removing 0 promotes 1)."""
+
+    def __init__(self, project: Project, obj: GameObject, frame_index: int) -> None:
+        self.description = f"Remove frame {frame_index} from '{obj.name}'"
+        self._project = project
+        self._obj = obj
+        if len(obj.frames) <= 1:
+            raise ValueError("Cannot remove the last remaining frame of an object.")
+        if not (0 <= frame_index < len(obj.frames)):
+            raise ValueError(f"Frame index out of range: {frame_index}.")
+        self._old_frames = list(obj.frames)
+        self._new_frames = [
+            f for idx, f in enumerate(obj.frames) if idx != frame_index
+        ]
+
+    def execute(self) -> None:
+        self._obj.frames = list(self._new_frames)
+        self._project.rebuild_glyph_tables()
+
+    def undo(self) -> None:
+        self._obj.frames = list(self._old_frames)
+        self._project.rebuild_glyph_tables()
+
+
+class ReorderObjectFrameCommand(Command):
+    """Move a frame from `from_index` to `to_index` on a GameObject."""
+
+    def __init__(
+        self,
+        project: Project,
+        obj: GameObject,
+        from_index: int,
+        to_index: int,
+    ) -> None:
+        self.description = f"Reorder frames of '{obj.name}'"
+        self._project = project
+        self._obj = obj
+        if not (0 <= from_index < len(obj.frames) and 0 <= to_index < len(obj.frames)):
+            raise ValueError(f"Frame index out of range ({from_index} -> {to_index}).")
+        self._old_frames = list(obj.frames)
+        reordered = list(obj.frames)
+        item = reordered.pop(from_index)
+        reordered.insert(to_index, item)
+        self._new_frames = reordered
+
+    def execute(self) -> None:
+        self._obj.frames = list(self._new_frames)
+        self._project.rebuild_glyph_tables()
+
+    def undo(self) -> None:
+        self._obj.frames = list(self._old_frames)
+        self._project.rebuild_glyph_tables()
+
+
+class ReplaceObjectFrameCommand(Command):
+    """Replace the region of frame `frame_index` on a GameObject."""
+
+    def __init__(
+        self,
+        project: Project,
+        obj: GameObject,
+        frame_index: int,
+        new_region: StampRegion,
+    ) -> None:
+        self.description = f"Replace frame {frame_index} of '{obj.name}'"
+        self._project = project
+        self._obj = obj
+        if not (0 <= frame_index < len(obj.frames)):
+            raise ValueError(f"Frame index out of range: {frame_index}.")
+        if (new_region.w, new_region.h) != (obj.w, obj.h):
+            raise ValueError(
+                f"Frame size {new_region.w}x{new_region.h} does not match object size {obj.w}x{obj.h}."
+            )
+        self._old_frames = list(obj.frames)
+        updated = list(obj.frames)
+        updated[frame_index] = new_region
+        self._new_frames = updated
+
+    def execute(self) -> None:
+        self._obj.frames = list(self._new_frames)
+        self._project.rebuild_glyph_tables()
+
+    def undo(self) -> None:
+        self._obj.frames = list(self._old_frames)
+        self._project.rebuild_glyph_tables()
 
 
 # ---------------------------------------------------------------------------

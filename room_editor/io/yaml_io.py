@@ -1,4 +1,4 @@
-"""Deterministic YAML v4 project serialization and deserialization (F-22..F-26)."""
+"""Deterministic YAML v5 project serialization and deserialization."""
 
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ from room_editor.model.compression import (
 )
 from room_editor.model.glyphs import (
     DEFAULT_PIXEL_MAPPING,
+    MAX_ANIMATION_SPEED,
+    MAX_OBJECT_FRAMES,
     StampRegion,
     is_valid_pixel_mapping,
 )
@@ -52,7 +54,7 @@ class UnsupportedVersionError(ProjectIOError):
 
 @dataclass
 class ProjectLoadResult:
-    """Loaded Project along with missing/invalid image references and glyph table mismatches."""
+    """Loaded Project along with missing/invalid image references and derived-data mismatches."""
 
     project: Project
     missing_images: list[tuple[str, str]] = field(default_factory=list)
@@ -127,16 +129,32 @@ def _project_to_yaml_dict(project: Project) -> dict[str, Any]:
 
     groups_list = []
     for grp in project.object_groups:
-        glyphs_list = [
-            _FlowMap(
-                {
-                    "code": entry.code,
-                    "data": _QuotedStr(entry.data_hex),
-                    "src": _FlowList([entry.src[0], entry.src[1]]),
-                }
-            )
-            for entry in grp.glyph_table.entries
-        ]
+        glyphs_list = []
+        for entry in grp.glyph_table.entries:
+            if entry.is_dedicated:
+                assert entry.object_id is not None and entry.cells and entry.frames
+                glyphs_list.append(
+                    _FlowMap(
+                        {
+                            "code": entry.code,
+                            "data": _QuotedStr(entry.data_hex),
+                            "object": entry.object_id,
+                            "cells": _FlowList([_FlowList([cx, cy]) for cx, cy in entry.cells]),
+                            "frames": _FlowList([_QuotedStr(hx) for hx in entry.frames_hex]),
+                        }
+                    )
+                )
+            else:
+                assert entry.src is not None
+                glyphs_list.append(
+                    _FlowMap(
+                        {
+                            "code": entry.code,
+                            "data": _QuotedStr(entry.data_hex),
+                            "src": _FlowList([entry.src[0], entry.src[1]]),
+                        }
+                    )
+                )
         palettes_list = [_FlowMap(p.to_dict()) for p in grp.palettes]
         groups_list.append(
             {
@@ -150,6 +168,7 @@ def _project_to_yaml_dict(project: Project) -> dict[str, Any]:
 
     objects_list = []
     for obj in project.objects:
+        frames_val = _FlowList([_FlowMap(f.to_dict()) for f in obj.frames])
         objects_list.append(
             _FlowMap(
                 {
@@ -160,7 +179,8 @@ def _project_to_yaml_dict(project: Project) -> dict[str, Any]:
                     "non-blockable": bool(obj.non_blockable),
                     "pickable": bool(obj.pickable),
                     "colpf3": bool(obj.colpf3),
-                    "region": _FlowMap(obj.region.to_dict()),
+                    "animation_speed": int(obj.animation_speed),
+                    "frames": frames_val,
                 }
             )
         )
@@ -258,30 +278,56 @@ def _parse_int(val: Any, field_name: str) -> int:
 
 def _normalize_stored_glyphs(
     raw_glyphs: Any,
-) -> tuple[list[tuple[int, str, tuple[int, int]]] | None, str]:
-    """Normalize stored YAML glyphs list for comparison against derived GlyphTable."""
+) -> tuple[list[tuple[Any, ...]] | None, str]:
+    """Normalize stored YAML glyphs list (static + dedicated) for comparison."""
     if raw_glyphs is None:
         return None, "stored 'glyphs' table is missing"
     if not isinstance(raw_glyphs, list):
         return None, "stored 'glyphs' field is not a list"
 
-    normalized: list[tuple[int, str, tuple[int, int]]] = []
+    normalized: list[tuple[Any, ...]] = []
     for idx, entry in enumerate(raw_glyphs):
         if not isinstance(entry, dict):
             return None, f"stored glyphs[{idx}] is not a mapping"
         code = entry.get("code")
         data = entry.get("data")
-        src = entry.get("src")
-        if (
-            isinstance(code, bool)
-            or not isinstance(code, int)
-            or not isinstance(data, str)
-            or not isinstance(src, list)
-            or len(src) != 2
-            or any(isinstance(v, bool) or not isinstance(v, int) for v in src)
-        ):
-            return None, f"stored glyphs[{idx}] has malformed fields: {entry!r}"
-        normalized.append((int(code), data.strip().upper(), (int(src[0]), int(src[1]))))
+        if isinstance(code, bool) or not isinstance(code, int) or not isinstance(data, str):
+            return None, f"stored glyphs[{idx}] has malformed code/data: {entry!r}"
+        data_hex = data.strip().upper()
+        if "object" in entry or "cells" in entry or "frames" in entry:
+            oid = entry.get("object")
+            cells_raw = entry.get("cells")
+            frames_raw = entry.get("frames")
+            if (
+                isinstance(oid, bool)
+                or not isinstance(oid, int)
+                or not isinstance(cells_raw, list)
+                or not cells_raw
+                or not isinstance(frames_raw, list)
+                or len(frames_raw) < 2
+                or not all(isinstance(s, str) for s in frames_raw)
+            ):
+                return None, f"stored dedicated glyphs[{idx}] has malformed fields: {entry!r}"
+            norm_cells: list[tuple[int, int]] = []
+            for cell_item in cells_raw:
+                if (
+                    not isinstance(cell_item, list)
+                    or len(cell_item) != 2
+                    or any(isinstance(v, bool) or not isinstance(v, int) for v in cell_item)
+                ):
+                    return None, f"stored dedicated glyphs[{idx}] has malformed cell coord: {entry!r}"
+                norm_cells.append((int(cell_item[0]), int(cell_item[1])))
+            norm_frames = tuple(s.strip().upper() for s in frames_raw)
+            normalized.append((int(code), data_hex, "ded", int(oid), tuple(norm_cells), norm_frames))
+        else:
+            src = entry.get("src")
+            if (
+                not isinstance(src, list)
+                or len(src) != 2
+                or any(isinstance(v, bool) or not isinstance(v, int) for v in src)
+            ):
+                return None, f"stored static glyphs[{idx}] has malformed fields: {entry!r}"
+            normalized.append((int(code), data_hex, "src", (int(src[0]), int(src[1]))))
     return normalized, ""
 
 
@@ -418,28 +464,51 @@ def deserialize_project_from_yaml(
     groups_by_name = {g.name: g for g in object_groups}
 
     objects: list[GameObject] = []
+    stored_frame_data_by_id: dict[int, Any] = {}
+    has_frame_data_by_id: dict[int, bool] = {}
     for obj_raw in raw.get("objects") or []:
-        reg_raw = obj_raw.get("region")
-        if not isinstance(reg_raw, dict):
+        oid = _parse_int(obj_raw.get("id"), "objects[].id")
+        frames_raw = obj_raw.get("frames")
+        if not isinstance(frames_raw, list) or not frames_raw:
             raise ProjectIOError(
-                f"Object {obj_raw.get('id')!r} is missing required 'region' mapping."
+                f"Object {oid} is missing required non-empty 'frames' list."
             )
-        region = StampRegion(
-            x=_parse_int(reg_raw.get("x", 0), "objects[].region.x"),
-            y=_parse_int(reg_raw.get("y", 0), "objects[].region.y"),
-            w=_parse_int(reg_raw.get("w", 1), "objects[].region.w"),
-            h=_parse_int(reg_raw.get("h", 1), "objects[].region.h"),
+        if len(frames_raw) > MAX_OBJECT_FRAMES:
+            raise ProjectIOError(
+                f"Object {oid} defines {len(frames_raw)} frames; maximum is {MAX_OBJECT_FRAMES}."
+            )
+        frames: list[StampRegion] = []
+        for f_idx, freg_raw in enumerate(frames_raw):
+            if not isinstance(freg_raw, dict):
+                raise ProjectIOError(
+                    f"Object {oid} frames[{f_idx}] must be a mapping."
+                )
+            frames.append(
+                StampRegion(
+                    x=_parse_int(freg_raw.get("x", 0), f"objects[].frames[{f_idx}].x"),
+                    y=_parse_int(freg_raw.get("y", 0), f"objects[].frames[{f_idx}].y"),
+                    w=_parse_int(freg_raw.get("w", 1), f"objects[].frames[{f_idx}].w"),
+                    h=_parse_int(freg_raw.get("h", 1), f"objects[].frames[{f_idx}].h"),
+                )
+            )
+        anim_speed = _parse_int(
+            obj_raw.get("animation_speed", 0), "objects[].animation_speed"
         )
+        if not (0 <= anim_speed <= MAX_ANIMATION_SPEED):
+            raise ProjectIOError(
+                f"Object {oid} animation_speed ({anim_speed}) must be in 0..{MAX_ANIMATION_SPEED}."
+            )
         objects.append(
             GameObject(
-                id=_parse_int(obj_raw.get("id"), "objects[].id"),
+                id=oid,
                 name=str(obj_raw.get("name", "")),
                 group=str(obj_raw.get("group", "")),
                 tags=[str(t) for t in (obj_raw.get("tags") or [])],
                 non_blockable=bool(obj_raw.get("non-blockable", False)),
                 pickable=bool(obj_raw.get("pickable", False)),
                 colpf3=bool(obj_raw.get("colpf3", False)),
-                region=region,
+                frames=frames,
+                animation_speed=anim_speed,
             )
         )
 
@@ -555,19 +624,30 @@ def deserialize_project_from_yaml(
         stored_norm, err_msg = _normalize_stored_glyphs(stored_glyphs_by_group.get(grp.name))
         if stored_norm is None:
             glyph_table_mismatches.append((grp.name, err_msg))
-            continue
-        derived_norm = [
-            (entry.code, entry.data_hex, entry.src)
-            for entry in grp.glyph_table.entries
-        ]
-        if stored_norm != derived_norm:
-            glyph_table_mismatches.append(
-                (
-                    grp.name,
-                    f"Stored glyph table ({len(stored_norm)} glyph(s)) does not match "
-                    f"PNG-derived table ({len(derived_norm)} glyph(s)).",
+        else:
+            derived_norm: list[tuple[Any, ...]] = []
+            for entry in grp.glyph_table.entries:
+                if entry.is_dedicated:
+                    derived_norm.append(
+                        (
+                            entry.code,
+                            entry.data_hex,
+                            "ded",
+                            entry.object_id,
+                            entry.cells,
+                            entry.frames_hex,
+                        )
+                    )
+                else:
+                    derived_norm.append((entry.code, entry.data_hex, "src", entry.src))
+            if stored_norm != derived_norm:
+                glyph_table_mismatches.append(
+                    (
+                        grp.name,
+                        f"Stored glyph table ({len(stored_norm)} glyph(s)) does not match "
+                        f"PNG-derived table ({len(derived_norm)} glyph(s)).",
+                    )
                 )
-            )
 
     return ProjectLoadResult(
         project=project,

@@ -184,7 +184,7 @@ def test_gui_smoke_acceptance_workflow(qapp: QApplication, tmp_path: Path) -> No
     proj_file = tmp_path / "acceptance.yaml"
     save_project(proj, proj_file)
     yaml_text = proj_file.read_text(encoding="utf-8")
-    assert "version: 4" in yaml_text
+    assert "version: 5" in yaml_text
     assert "repeat-x: 10" in yaml_text
 
     reloaded = load_project(proj_file)

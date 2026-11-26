@@ -34,14 +34,15 @@ ROOMS_ASM_FILES     := $(GEN_DIR)/rooms_defs.asm \
                        $(GEN_DIR)/styles.asm \
                        $(GEN_DIR)/objects.asm \
                        $(GEN_DIR)/rooms.asm \
-                       $(GEN_DIR)/teleports.asm
+                       $(GEN_DIR)/teleports.asm \
+                       $(GEN_DIR)/animations.asm
 
 INTRO_TXT           := texts/intro.txt
 INTRO_COMPILER      := scripts/compile_intro.py
 INTRO_DATA_ASM      := $(GEN_DIR)/intro_text.asm
 
 ASM_SRCS        := main.asm hardware.asm colors.asm zeropage.asm \
-                   lib/rle.asm lib/pmg.asm lib/player.asm engine/input.asm engine/dli.asm engine/room.asm \
+                   lib/rle.asm lib/pmg.asm lib/player.asm engine/input.asm engine/dli.asm engine/room.asm engine/anim.asm \
                    scenes/title.asm scenes/intro.asm scenes/game.asm scenes/gameover.asm
 
 .PHONY: all assets data audio xex tests test check_memory run clean

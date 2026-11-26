@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtCore import QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPainter, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -17,6 +21,7 @@ from PySide6.QtWidgets import (
 
 from room_editor.model.glyphs import (
     MAX_GLYPHS_PER_GROUP,
+    MAX_OBJECT_FRAMES,
     StampRegion,
 )
 from room_editor.model.palette import Palette
@@ -159,14 +164,27 @@ class StampImageCanvas(QWidget):
         for obj in self._project.objects:
             if obj.group != self._group.name:
                 continue
-            r = obj.region
-            rect = QRect(r.x * cw, r.y * ch, r.w * cw, r.h * ch)
             if self._selected_object is not None and obj.id == self._selected_object.id:
-                painter.setPen(QPen(QColor(255, 215, 65), 2, Qt.PenStyle.DashLine))
+                for f_idx, r in enumerate(obj.frames):
+                    rect = QRect(r.x * cw, r.y * ch, r.w * cw, r.h * ch)
+                    color = QColor(255, 215, 65) if f_idx == 0 else QColor(255, 145, 50)
+                    painter.setPen(QPen(color, 2, Qt.PenStyle.DashLine))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawRect(rect.adjusted(1, 1, -1, -1))
+                    if obj.frame_count > 1:
+                        badge = QRect(r.x * cw + 2, r.y * ch + 2, 18, 12)
+                        painter.fillRect(badge, QColor(0, 0, 0, 175))
+                        painter.setPen(color)
+                        font = painter.font()
+                        font.setPointSize(7)
+                        painter.setFont(font)
+                        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, f"F{f_idx}")
             else:
+                r = obj.region
+                rect = QRect(r.x * cw, r.y * ch, r.w * cw, r.h * ch)
                 painter.setPen(QPen(QColor(160, 180, 210, 150), 1, Qt.PenStyle.DotLine))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(rect.adjusted(1, 1, -1, -1))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(rect.adjusted(1, 1, -1, -1))
 
         if self._selection is not None:
             s = self._selection
@@ -218,10 +236,14 @@ class StampImageCanvas(QWidget):
 
 
 class StampImageWidget(QWidget):
-    """Stamp Image panel with zoom, 4x8 grid, COLPF3 preview, and preview palette selector."""
+    """Stamp Image panel with zoom, 4x8 grid, COLPF3/palette preview, and animation frames."""
 
     create_object_requested = Signal(object)  # StampRegion
     apply_region_requested = Signal(object)  # StampRegion
+    add_frame_requested = Signal(object)  # StampRegion
+    replace_frame_requested = Signal(int, object)  # (frame_idx, StampRegion)
+    remove_frame_requested = Signal(int)  # frame_idx
+    reorder_frame_requested = Signal(int, int)  # (from_idx, to_idx)
     selection_changed = Signal(object)  # StampRegion
     preview_palette_changed = Signal(str)  # palette name (UI-only preview choice)
 
@@ -231,7 +253,14 @@ class StampImageWidget(QWidget):
         self._project = Project()
         self._group: ObjectGroup | None = None
         self._selected_object: GameObject | None = None
+        self._selected_frame_idx: int = 0
         self._block_pal_signal = False
+        self._block_frame_signal = False
+        self._preview_playing = False
+        self._preview_frame_idx = 0
+
+        self._anim_timer = QTimer(self)
+        self._anim_timer.timeout.connect(self._on_anim_timer_tick)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -286,12 +315,55 @@ class StampImageWidget(QWidget):
 
         actions = QHBoxLayout()
         self._btn_create = QPushButton("+ Create Object from Selection")
-        self._btn_create.clicked.connect(self._on_create_clicked)
+        self._btn_create.clicked.connect(self._on_primary_action_clicked)
         self._btn_apply_region = QPushButton("Update Selected Object Region")
         self._btn_apply_region.clicked.connect(self._on_apply_region_clicked)
         actions.addWidget(self._btn_create)
         actions.addWidget(self._btn_apply_region)
         layout.addLayout(actions)
+
+        # Animation Frames panel
+        self._frames_box = QGroupBox("Object Frames")
+        frames_layout = QVBoxLayout(self._frames_box)
+
+        top_frames_bar = QHBoxLayout()
+        self._lbl_frame_counter = QLabel("0/16")
+        top_frames_bar.addWidget(self._lbl_frame_counter)
+        top_frames_bar.addStretch()
+        self._btn_play_preview = QPushButton("▶ Play Preview")
+        self._btn_play_preview.clicked.connect(self._on_toggle_play_preview)
+        top_frames_bar.addWidget(self._btn_play_preview)
+        self._lbl_anim_preview = QLabel()
+        self._lbl_anim_preview.setMinimumSize(32, 32)
+        self._lbl_anim_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_anim_preview.setStyleSheet("border: 1px solid #444; background: #1c1c20;")
+        top_frames_bar.addWidget(self._lbl_anim_preview)
+        frames_layout.addLayout(top_frames_bar)
+
+        self._frame_list = QListWidget()
+        self._frame_list.setFlow(QListView.Flow.LeftToRight)
+        self._frame_list.setWrapping(False)
+        self._frame_list.setIconSize(QSize(48, 48))
+        self._frame_list.setMaximumHeight(92)
+        self._frame_list.currentRowChanged.connect(self._on_frame_list_row_changed)
+        frames_layout.addWidget(self._frame_list)
+
+        frame_btns = QHBoxLayout()
+        self._btn_replace_frame = QPushButton("Replace Frame")
+        self._btn_replace_frame.clicked.connect(self._on_replace_frame_clicked)
+        self._btn_move_frame_left = QPushButton("Move Left")
+        self._btn_move_frame_left.clicked.connect(lambda: self._on_reorder_frame(-1))
+        self._btn_move_frame_right = QPushButton("Move Right")
+        self._btn_move_frame_right.clicked.connect(lambda: self._on_reorder_frame(1))
+        self._btn_remove_frame = QPushButton("Remove Frame")
+        self._btn_remove_frame.clicked.connect(self._on_remove_frame_clicked)
+        frame_btns.addWidget(self._btn_replace_frame)
+        frame_btns.addWidget(self._btn_move_frame_left)
+        frame_btns.addWidget(self._btn_move_frame_right)
+        frame_btns.addWidget(self._btn_remove_frame)
+        frames_layout.addLayout(frame_btns)
+
+        layout.addWidget(self._frames_box)
 
     def set_data(
         self,
@@ -300,9 +372,18 @@ class StampImageWidget(QWidget):
         selected_object: GameObject | None,
         preview_palette_name: str = "",
     ) -> None:
+        prev_obj_id = self._selected_object.id if self._selected_object is not None else None
         self._project = project
         self._group = group
         self._selected_object = selected_object
+
+        if selected_object is None or selected_object.id != prev_obj_id:
+            self._selected_frame_idx = 0
+            self._stop_preview()
+        elif selected_object.frames:
+            self._selected_frame_idx = max(
+                0, min(self._selected_frame_idx, len(selected_object.frames) - 1)
+            )
 
         self._block_pal_signal = True
         try:
@@ -323,7 +404,17 @@ class StampImageWidget(QWidget):
             self._block_pal_signal = False
 
         self._canvas.set_data(project, group, selected_object, active_pal)
+        self._refresh_frames_panel()
         self._refresh_counters()
+
+    def set_selected_frame_index(self, index: int) -> None:
+        if self._selected_object is None or not self._selected_object.frames:
+            self._selected_frame_idx = 0
+            return
+        self._selected_frame_idx = max(
+            0, min(int(index), len(self._selected_object.frames) - 1)
+        )
+        self._refresh_frames_panel()
 
     def set_preview_palette(self, name: str) -> None:
         self._block_pal_signal = True
@@ -334,6 +425,7 @@ class StampImageWidget(QWidget):
                 self._canvas.set_preview_palette_name(name)
         finally:
             self._block_pal_signal = False
+        self._refresh_frames_panel()
 
     def preview_palette_name(self) -> str:
         return str(self._combo_preview_pal.currentData() or "")
@@ -350,19 +442,29 @@ class StampImageWidget(QWidget):
             return
         name = self.preview_palette_name()
         self._canvas.set_preview_palette_name(name)
+        self._refresh_frames_panel()
         self.preview_palette_changed.emit(name)
 
     def _on_colpf3_toggled(self, checked: bool) -> None:
         self._canvas.set_preview_colpf3(checked)
+        self._refresh_frames_panel()
 
     def _on_file_pal_toggled(self, checked: bool) -> None:
         self._chk_colpf3.setEnabled(not checked)
         self._combo_preview_pal.setEnabled(not checked and self._combo_preview_pal.count() > 0)
         self._canvas.set_use_file_palette(checked)
+        self._refresh_frames_panel()
 
     def _on_canvas_selection_changed(self, region: StampRegion) -> None:
         self._refresh_counters()
         self.selection_changed.emit(region)
+
+    def _has_selected_obj_in_group(self) -> bool:
+        return (
+            self._selected_object is not None
+            and self._group is not None
+            and self._selected_object.group == self._group.name
+        )
 
     def _refresh_counters(self) -> None:
         if self._group is None or self._group.image is None:
@@ -371,47 +473,250 @@ class StampImageWidget(QWidget):
             self._lbl_sel_counter.setText("Load an indexed PNG to select stamp regions.")
             self._btn_create.setEnabled(False)
             self._btn_apply_region.setEnabled(False)
+            self._update_frame_buttons()
             return
 
         used = self._group.glyph_table.used_count
         free = self._group.glyph_table.free_slots
-        self._lbl_group_counter.setText(
-            f"Group '{self._group.name}' glyphs: {used}/{MAX_GLYPHS_PER_GROUP} ({free} free)"
-        )
+        analysis = self._group.glyph_analysis
+        if analysis is not None and analysis.dedicated_slot_count > 0:
+            self._lbl_group_counter.setText(
+                f"Group '{self._group.name}' glyphs: {used}/{MAX_GLYPHS_PER_GROUP} "
+                f"(static: {analysis.static_glyph_count}, anim: {analysis.dedicated_slot_count}, {free} free)"
+            )
+        else:
+            self._lbl_group_counter.setText(
+                f"Group '{self._group.name}' glyphs: {used}/{MAX_GLYPHS_PER_GROUP} ({free} free)"
+            )
 
         sel = self._canvas.selection()
+        in_group = self._has_selected_obj_in_group()
+
+        if in_group:
+            assert self._selected_object is not None
+            obj = self._selected_object
+            self._btn_create.setText("+ Add Frame")
+            if obj.frame_count >= MAX_OBJECT_FRAMES:
+                self._btn_create.setEnabled(False)
+                self._btn_create.setToolTip("maximum 16 frames")
+            elif sel is None or (sel.w, sel.h) != (obj.w, obj.h):
+                self._btn_create.setEnabled(False)
+                sel_desc = f"{sel.w}×{sel.h}" if sel is not None else "none"
+                self._btn_create.setToolTip(
+                    f"Selection size ({sel_desc}) must match object size ({obj.w}×{obj.h})"
+                )
+            else:
+                self._btn_create.setEnabled(True)
+                self._btn_create.setToolTip("Add current selection as a new animation frame")
+        else:
+            self._btn_create.setText("+ Create Object from Selection")
+            self._btn_create.setToolTip("Create a new object from the selected PNG region")
+            self._btn_create.setEnabled(sel is not None)
+
+        self._btn_apply_region.setEnabled(in_group and sel is not None)
+
         if sel is None:
             self._lbl_sel_counter.setStyleSheet("color: #aaa;")
             self._lbl_sel_counter.setText("Drag on the image to select a stamp region.")
-            self._btn_create.setEnabled(False)
-            self._btn_apply_region.setEnabled(False)
+            self._update_frame_buttons()
             return
 
-        check_new = self._project.check_region_glyph_budget(self._group.name, sel)
-        status_color = "#7ee081" if check_new.ok else "#ff6b6b"
-        self._lbl_sel_counter.setStyleSheet(f"color: {status_color};")
-        if check_new.ok:
-            self._lbl_sel_counter.setText(
-                f"Selection: ({sel.x}, {sel.y}) {sel.w}×{sel.h} ({sel.cell_count} cells) | "
-                f"+{check_new.new_glyphs} new glyph(s) (free: {check_new.free_slots})"
+        if in_group and self._selected_object is not None and (sel.w, sel.h) == (
+            self._selected_object.w,
+            self._selected_object.h,
+        ):
+            obj = self._selected_object
+            check_add = self._project.check_object_glyph_budget(
+                self._group.name,
+                list(obj.frames) + [sel],
+                obj.animation_speed,
+                exclude_object_id=obj.id,
+            )
+            delta = check_add.total_used - used if obj.frame_count < MAX_OBJECT_FRAMES else 0
+            delta_txt = f"{delta:+d}" if delta != 0 else "0"
+            status_color = "#7ee081" if check_add.ok else "#ff6b6b"
+            self._lbl_sel_counter.setStyleSheet(f"color: {status_color};")
+            if check_add.ok:
+                self._lbl_sel_counter.setText(
+                    f"Add Frame selection: ({sel.x}, {sel.y}) {sel.w}×{sel.h} | "
+                    f"{delta_txt} slot(s) ({check_add.total_used}/{MAX_GLYPHS_PER_GROUP}, "
+                    f"free: {check_add.free_slots})"
+                )
+            else:
+                self._lbl_sel_counter.setText(
+                    f"Add Frame selection: ({sel.x}, {sel.y}) {sel.w}×{sel.h} — {check_add.error_message}"
+                )
+        else:
+            check_new = self._project.check_region_glyph_budget(self._group.name, sel)
+            status_color = "#7ee081" if check_new.ok else "#ff6b6b"
+            self._lbl_sel_counter.setStyleSheet(f"color: {status_color};")
+            if check_new.ok:
+                self._lbl_sel_counter.setText(
+                    f"Selection: ({sel.x}, {sel.y}) {sel.w}×{sel.h} ({sel.cell_count} cells) | "
+                    f"+{check_new.new_glyphs} new glyph(s) (free: {check_new.free_slots})"
+                )
+            else:
+                self._lbl_sel_counter.setText(
+                    f"Selection: ({sel.x}, {sel.y}) {sel.w}×{sel.h} ({sel.cell_count} cells) — {check_new.error_message}"
+                )
+
+        self._update_frame_buttons()
+
+    def _refresh_frames_panel(self) -> None:
+        obj = self._selected_object if self._has_selected_obj_in_group() else None
+        self._frames_box.setEnabled(obj is not None)
+        self._block_frame_signal = True
+        try:
+            self._frame_list.clear()
+            if obj is None or self._group is None:
+                self._lbl_frame_counter.setText("0/16")
+                self._lbl_anim_preview.clear()
+                self._stop_preview()
+                return
+
+            pal = self._group.get_palette(self.preview_palette_name()) or self._group.default_palette
+            use_colpf3 = obj.colpf3 or self._chk_colpf3.isChecked()
+            self._lbl_frame_counter.setText(f"{obj.frame_count}/{MAX_OBJECT_FRAMES}")
+            for f_idx, freg in enumerate(obj.frames):
+                pix = self._renderer.render_region_pixmap(
+                    self._group,
+                    freg,
+                    colpf3=use_colpf3,
+                    scale=2,
+                    palette=pal,
+                )
+                item = QListWidgetItem(pix, f"F{f_idx}")
+                item.setToolTip(f"Frame {f_idx}: ({freg.x}, {freg.y}) {freg.w}×{freg.h}")
+                self._frame_list.addItem(item)
+
+            if 0 <= self._selected_frame_idx < self._frame_list.count():
+                self._frame_list.setCurrentRow(self._selected_frame_idx)
+        finally:
+            self._block_frame_signal = False
+
+        self._update_anim_preview_pixmap()
+        self._update_frame_buttons()
+
+    def _update_frame_buttons(self) -> None:
+        obj = self._selected_object if self._has_selected_obj_in_group() else None
+        sel = self._canvas.selection()
+        has_obj = obj is not None
+        cnt = obj.frame_count if obj is not None else 0
+        idx = self._selected_frame_idx if has_obj else -1
+
+        self._btn_remove_frame.setEnabled(has_obj and cnt > 1 and 0 <= idx < cnt)
+        self._btn_move_frame_left.setEnabled(has_obj and idx > 0)
+        self._btn_move_frame_right.setEnabled(has_obj and 0 <= idx < cnt - 1)
+        matching_sel = (
+            obj is not None
+            and sel is not None
+            and (sel.w, sel.h) == (obj.w, obj.h)
+            and self._group is not None
+            and self._group.image is not None
+        )
+        self._btn_replace_frame.setEnabled(matching_sel and 0 <= idx < cnt)
+        if not matching_sel and obj is not None and sel is not None:
+            self._btn_replace_frame.setToolTip(
+                f"Selection size ({sel.w}×{sel.h}) must match object size ({obj.w}×{obj.h})"
             )
         else:
-            self._lbl_sel_counter.setText(
-                f"Selection: ({sel.x}, {sel.y}) {sel.w}×{sel.h} ({sel.cell_count} cells) — {check_new.error_message}"
-            )
+            self._btn_replace_frame.setToolTip("Replace selected frame's region with current selection")
 
-        self._btn_create.setEnabled(True)
-        self._btn_apply_region.setEnabled(
-            self._selected_object is not None
-            and self._selected_object.group == self._group.name
+        can_play = obj is not None and obj.is_animated and self._group is not None and self._group.image is not None
+        self._btn_play_preview.setEnabled(can_play)
+        if not can_play:
+            self._stop_preview()
+            self._btn_play_preview.setToolTip("Requires >= 2 frames and animation speed > 0")
+        else:
+            self._btn_play_preview.setToolTip("Play/Stop object animation at configured PAL speed")
+
+    def _update_anim_preview_pixmap(self) -> None:
+        obj = self._selected_object if self._has_selected_obj_in_group() else None
+        if obj is None or self._group is None or not obj.frames:
+            self._lbl_anim_preview.clear()
+            return
+        idx = self._preview_frame_idx if self._preview_playing else self._selected_frame_idx
+        idx = max(0, min(idx, len(obj.frames) - 1))
+        pal = self._group.get_palette(self.preview_palette_name()) or self._group.default_palette
+        use_colpf3 = obj.colpf3 or self._chk_colpf3.isChecked()
+        pix = self._renderer.render_region_pixmap(
+            self._group,
+            obj.frames[idx],
+            colpf3=use_colpf3,
+            scale=2,
+            palette=pal,
         )
+        self._lbl_anim_preview.setPixmap(pix)
 
-    def _on_create_clicked(self) -> None:
+    def _stop_preview(self) -> None:
+        self._preview_playing = False
+        self._anim_timer.stop()
+        if hasattr(self, "_btn_play_preview"):
+            self._btn_play_preview.setText("▶ Play Preview")
+        if hasattr(self, "_lbl_anim_preview"):
+            self._update_anim_preview_pixmap()
+
+    def _on_toggle_play_preview(self) -> None:
+        obj = self._selected_object if self._has_selected_obj_in_group() else None
+        if obj is None or not obj.is_animated:
+            self._stop_preview()
+            return
+        if self._preview_playing:
+            self._stop_preview()
+        else:
+            self._preview_playing = True
+            self._preview_frame_idx = 0
+            self._btn_play_preview.setText("■ Stop Preview")
+            self._update_anim_preview_pixmap()
+            self._anim_timer.start(max(1, int(obj.animation_speed)) * 20)
+
+    def _on_anim_timer_tick(self) -> None:
+        obj = self._selected_object if self._has_selected_obj_in_group() else None
+        if obj is None or not obj.is_animated:
+            self._stop_preview()
+            return
+        self._preview_frame_idx = (self._preview_frame_idx + 1) % obj.frame_count
+        self._update_anim_preview_pixmap()
+
+    def _on_frame_list_row_changed(self, row: int) -> None:
+        if self._block_frame_signal or row < 0:
+            return
+        obj = self._selected_object if self._has_selected_obj_in_group() else None
+        if obj is None or not (0 <= row < len(obj.frames)):
+            return
+        self._selected_frame_idx = row
+        self._update_anim_preview_pixmap()
+        self._update_frame_buttons()
+        self.set_selection(obj.frames[row])
+        self.selection_changed.emit(obj.frames[row])
+
+    def _on_primary_action_clicked(self) -> None:
         sel = self._canvas.selection()
-        if sel is not None:
+        if sel is None:
+            return
+        if self._has_selected_obj_in_group():
+            self.add_frame_requested.emit(sel)
+        else:
             self.create_object_requested.emit(sel)
 
     def _on_apply_region_clicked(self) -> None:
         sel = self._canvas.selection()
         if sel is not None:
             self.apply_region_requested.emit(sel)
+
+    def _on_replace_frame_clicked(self) -> None:
+        sel = self._canvas.selection()
+        if sel is not None and self._has_selected_obj_in_group():
+            self.replace_frame_requested.emit(self._selected_frame_idx, sel)
+
+    def _on_remove_frame_clicked(self) -> None:
+        if self._has_selected_obj_in_group():
+            self.remove_frame_requested.emit(self._selected_frame_idx)
+
+    def _on_reorder_frame(self, delta: int) -> None:
+        obj = self._selected_object if self._has_selected_obj_in_group() else None
+        if obj is None:
+            return
+        target = self._selected_frame_idx + delta
+        if 0 <= target < obj.frame_count:
+            self.reorder_frame_requested.emit(self._selected_frame_idx, target)

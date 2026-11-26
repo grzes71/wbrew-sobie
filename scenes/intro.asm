@@ -104,6 +104,8 @@ intro_dst_hi
     lda #0
     sta SDMCTL
     sta DMACTL
+    sta zp_anim_active
+    sta zp_anim_pending
 
     ; 2. Silence POKEY & disable PMG inherited from Title Screen
     sta AUDCTL

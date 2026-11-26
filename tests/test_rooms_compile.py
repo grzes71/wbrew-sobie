@@ -78,6 +78,7 @@ def parse_generated_asm(asm_dir: Path) -> ParsedAsmImage:
         "objects.asm",
         "rooms.asm",
         "teleports.asm",
+        "animations.asm",
     ]
     texts = [
         (fname, (asm_dir / fname).read_text(encoding="utf-8"))
@@ -127,7 +128,15 @@ def parse_generated_asm(asm_dir: Path) -> ParsedAsmImage:
                 for item in items_str.split(","):
                     expr = item.strip()
                     val = 0
-                    if expr.startswith("<"):
+                    if expr.startswith("<(") and expr.endswith(")"):
+                        inner = expr[2:-1].strip()
+                        lbl, off_s = (p.strip() for p in inner.split("+", 1))
+                        val = (pass_symbols.get(lbl, 0) + _eval_atom(off_s, eqs)) & 0xFF
+                    elif expr.startswith(">(") and expr.endswith(")"):
+                        inner = expr[2:-1].strip()
+                        lbl, off_s = (p.strip() for p in inner.split("+", 1))
+                        val = ((pass_symbols.get(lbl, 0) + _eval_atom(off_s, eqs)) >> 8) & 0xFF
+                    elif expr.startswith("<"):
                         target = expr[1:].strip()
                         val = pass_symbols.get(target, 0) & 0xFF
                     elif expr.startswith(">"):
@@ -230,48 +239,84 @@ def reference_compose_from_yaml(yaml_path: Path) -> dict[int, list[list[int]]]:
     assert doc["version"] == EXPECTED_YAML_VERSION
 
     # Build group PNG + glyph tables
-    groups: dict[str, tuple[int, list[int], tuple[int, ...], dict[bytes, int]]] = {}
     png_data: dict[str, tuple[int, bytes, tuple[int, ...]]] = {}
     for g in doc["object_groups"]:
         img_path = yaml_path.parent / g["image"]
-        with Image.open(img_path) as im:
-            w, _h = im.size
-            data_fn = getattr(im, "get_flattened_data", im.getdata)
-            px = bytes(data_fn())
-        png_data[g["name"]] = (w, px, tuple(g["pixel_mapping"]))
+        if img_path.exists():
+            with Image.open(img_path) as im:
+                w, _h = im.size
+                data_fn = getattr(im, "get_flattened_data", im.getdata)
+                px = bytes(data_fn())
+            png_data[g["name"]] = (w, px, tuple(g["pixel_mapping"]))
+
+    def _tile_bytes(gname: str, tx: int, ty: int) -> bytes:
+        w_px, px, mapping = png_data[gname]
+        gb = bytearray(8)
+        for py in range(8):
+            row_off = (ty * 8 + py) * w_px + tx * 4
+            gb[py] = (
+                (mapping[px[row_off]] << 6)
+                | (mapping[px[row_off + 1]] << 4)
+                | (mapping[px[row_off + 2]] << 2)
+                | mapping[px[row_off + 3]]
+            )
+        return bytes(gb)
 
     objs_by_id = {int(o["id"]): o for o in doc["objects"]}
-    glyph_tables: dict[str, dict[bytes, int]] = {g["name"]: {} for g in doc["object_groups"]}
+    static_pools: dict[str, dict[bytes, int]] = {g["name"]: {} for g in doc["object_groups"]}
+    group_next_code: dict[str, int] = {g["name"]: 1 for g in doc["object_groups"]}
     obj_matrices: dict[int, tuple[int, int, list[int], bool]] = {}
 
     for oid in sorted(objs_by_id):
         o = objs_by_id[oid]
         gname = o["group"]
-        w_px, px, mapping = png_data[gname]
-        gtab = glyph_tables[gname]
-        rx, ry, rw, rh = o["region"]["x"], o["region"]["y"], o["region"]["w"], o["region"]["h"]
+        frames = o["frames"]
+        speed = int(o.get("animation_speed", 0))
+        is_anim = len(frames) >= 2 and speed > 0
+        f0 = frames[0]
+        rw, rh = int(f0["w"]), int(f0["h"])
         pf3 = bool(o.get("colpf3", False))
         nb = bool(o.get("non-blockable", False))
+        sp = static_pools[gname]
         mat: list[int] = []
-        for dy in range(rh):
-            for dx in range(rw):
-                gb = bytearray(8)
-                for py in range(8):
-                    row_off = ((ry + dy) * 8 + py) * w_px + (rx + dx) * 4
-                    gb[py] = (
-                        (mapping[px[row_off]] << 6)
-                        | (mapping[px[row_off + 1]] << 4)
-                        | (mapping[px[row_off + 2]] << 2)
-                        | mapping[px[row_off + 3]]
+        if not is_anim:
+            for dy in range(rh):
+                for dx in range(rw):
+                    gb = _tile_bytes(gname, int(f0["x"]) + dx, int(f0["y"]) + dy)
+                    if gb == b"\x00" * 8:
+                        mat.append(0)
+                    else:
+                        code = sp.get(gb)
+                        if code is None:
+                            code = group_next_code[gname]
+                            group_next_code[gname] += 1
+                            sp[gb] = code
+                        mat.append(code + 128 if pf3 else code)
+        else:
+            seq_code: dict[tuple[bytes, ...], int] = {}
+            for dy in range(rh):
+                for dx in range(rw):
+                    seq = tuple(
+                        _tile_bytes(gname, int(fr["x"]) + dx, int(fr["y"]) + dy) for fr in frames
                     )
-                gbytes = bytes(gb)
-                if gbytes == b"\x00" * 8:
-                    mat.append(0)
-                else:
-                    if gbytes not in gtab:
-                        gtab[gbytes] = len(gtab) + 1
-                    code = gtab[gbytes]
-                    mat.append(code + 128 if pf3 else code)
+                    if len(set(seq)) == 1:
+                        gb = seq[0]
+                        if gb == b"\x00" * 8:
+                            mat.append(0)
+                        else:
+                            code = sp.get(gb)
+                            if code is None:
+                                code = group_next_code[gname]
+                                group_next_code[gname] += 1
+                                sp[gb] = code
+                            mat.append(code + 128 if pf3 else code)
+                    else:
+                        code = seq_code.get(seq)
+                        if code is None:
+                            code = group_next_code[gname]
+                            group_next_code[gname] += 1
+                            seq_code[seq] = code
+                        mat.append(code + 128 if pf3 else code)
         obj_matrices[oid] = (rw, rh, mat, nb)
 
     result: dict[int, list[list[int]]] = {}
@@ -375,7 +420,7 @@ def test_all_in_one_fixture_player_crosscheck_and_features(tmp_path: Path) -> No
     # Intentionally include Polish diacritics, ID gaps (objects 1,2,4,5,7,8; rooms 1,3,5),
     # cross-group usage in Room 5 (produces warning unless strict), and same-room + cross-room teleports.
     yaml_doc = {
-        "version": 4,
+        "version": 5,
         "settings": {
             "default_palette": {"colbk": 0, "colpf0": 40, "colpf1": 202, "colpf2": 148, "colpf3": 15}
         },
@@ -408,7 +453,8 @@ def test_all_in_one_fixture_player_crosscheck_and_features(tmp_path: Path) -> No
                 "tags": ["Ściana"],
                 "non-blockable": True,
                 "colpf3": False,
-                "region": {"x": 0, "y": 0, "w": 2, "h": 1},
+                "animation_speed": 0,
+                "frames": [{"x": 0, "y": 0, "w": 2, "h": 1}],
             },
             # id 2: 1x1 blockable solid
             {
@@ -418,7 +464,8 @@ def test_all_in_one_fixture_player_crosscheck_and_features(tmp_path: Path) -> No
                 "tags": ["Ściana"],
                 "non-blockable": False,
                 "colpf3": False,
-                "region": {"x": 3, "y": 0, "w": 1, "h": 1},
+                "animation_speed": 0,
+                "frames": [{"x": 3, "y": 0, "w": 1, "h": 1}],
             },
             # id 3 skipped -> ID gap
             # id 4: colpf3 non-blockable 1x1 (same glyph at (0,0) as Okno Pół's left cell? No, uses (2,0))
@@ -430,7 +477,8 @@ def test_all_in_one_fixture_player_crosscheck_and_features(tmp_path: Path) -> No
                 "non-blockable": True,
                 "pickable": True,
                 "colpf3": True,
-                "region": {"x": 2, "y": 0, "w": 1, "h": 1},
+                "animation_speed": 0,
+                "frames": [{"x": 2, "y": 0, "w": 1, "h": 1}],
             },
             # id 5: duplicate cell matrix as id 2 (deduplicated cell block!)
             {
@@ -440,7 +488,8 @@ def test_all_in_one_fixture_player_crosscheck_and_features(tmp_path: Path) -> No
                 "tags": ["Drabina", "Ściana"],
                 "non-blockable": False,
                 "colpf3": False,
-                "region": {"x": 3, "y": 0, "w": 1, "h": 1},
+                "animation_speed": 0,
+                "frames": [{"x": 3, "y": 0, "w": 1, "h": 1}],
             },
             # id 6 skipped -> ID gap
             # id 7: Jaskinia 2x2 block
@@ -451,7 +500,8 @@ def test_all_in_one_fixture_player_crosscheck_and_features(tmp_path: Path) -> No
                 "tags": [],
                 "non-blockable": False,
                 "colpf3": False,
-                "region": {"x": 0, "y": 0, "w": 2, "h": 2},
+                "animation_speed": 0,
+                "frames": [{"x": 0, "y": 0, "w": 2, "h": 2}],
             },
         ],
         "rooms": [
@@ -628,18 +678,21 @@ def test_limits_255_objects_127_glyphs_and_255_instances(tmp_path: Path) -> None
                 "tags": [],
                 "non-blockable": True,
                 "colpf3": False,
-                "region": {
-                    "x": ((i - 1) % 16) if i <= obj_regions else 0,
-                    "y": ((i - 1) // 16) if i <= obj_regions else 0,
-                    "w": 1,
-                    "h": 1,
-                },
+                "animation_speed": 0,
+                "frames": [
+                    {
+                        "x": ((i - 1) % 16) if i <= obj_regions else 0,
+                        "y": ((i - 1) // 16) if i <= obj_regions else 0,
+                        "w": 1,
+                        "h": 1,
+                    }
+                ],
             }
             for i in range(1, n_objs + 1)
         ]
         placed = [{"object": 1, "x": i % ROOM_WIDTH, "y": (i // ROOM_WIDTH) % ROOM_HEIGHT} for i in range(n_inst)]
         return {
-            "version": 4,
+            "version": 5,
             "object_groups": [
                 {
                     "name": "g",
@@ -684,7 +737,7 @@ def test_error_cases_write_no_files(tmp_path: Path) -> None:
     _write_png(p_dir / "g.png", 4, 2, lambda gx, gy: _unique_tile(gy * 4 + gx))
 
     valid_doc: dict[str, Any] = {
-        "version": 4,
+        "version": 5,
         "object_groups": [
             {
                 "name": "g",
@@ -701,7 +754,8 @@ def test_error_cases_write_no_files(tmp_path: Path) -> None:
                 "tags": [],
                 "non-blockable": False,
                 "colpf3": False,
-                "region": {"x": 0, "y": 0, "w": 2, "h": 2},
+                "animation_speed": 0,
+                "frames": [{"x": 0, "y": 0, "w": 2, "h": 2}],
             }
         ],
         "rooms": [
@@ -745,7 +799,14 @@ def test_error_cases_write_no_files(tmp_path: Path) -> None:
     assert "start" in _run_bad(lambda d: d.pop("start")).lower()
     assert "sanitized" in _run_bad(
         lambda d: d["objects"].append(
-            {"id": 2, "name": "WALL!", "group": "g", "tags": [], "region": {"x": 1, "y": 0, "w": 1, "h": 1}}
+            {
+                "id": 2,
+                "name": "WALL!",
+                "group": "g",
+                "tags": [],
+                "animation_speed": 0,
+                "frames": [{"x": 1, "y": 0, "w": 1, "h": 1}],
+            }
         )
     ).lower()
 
@@ -786,6 +847,7 @@ def test_real_rooms_yaml_compile_player_and_mads(tmp_path: Path) -> None:
                 f"    icl '{(out_dir / 'objects.asm').as_posix()}'",
                 f"    icl '{(out_dir / 'rooms.asm').as_posix()}'",
                 f"    icl '{(out_dir / 'teleports.asm').as_posix()}'",
+                f"    icl '{(out_dir / 'animations.asm').as_posix()}'",
                 "    org $4000",
                 f"    icl '{(out_dir / 'charsets.asm').as_posix()}'",
                 f"    icl '{(out_dir / 'styles.asm').as_posix()}'",
@@ -890,3 +952,479 @@ def test_build_deps_list_and_make_clean_convention() -> None:
         rc = compiler_main([str(REPO_ROOT / "rooms.yaml"), "--list-deps"])
     assert rc == 0
     assert "castle.png" in buf.getvalue()
+
+
+def simulate_room_animations_from_asm(
+    asm_img: ParsedAsmImage, room_id: int, ticks: int
+) -> list[dict[int, list[bytes]]]:
+    """Simulate per-tick dedicated slot pattern bytes directly from Form 1/Form 2 ASM + pool."""
+    rcount = asm_img.read_id_byte("room_anim_count", room_id)
+    if rcount == 0:
+        return [{} for _ in range(ticks + 1)]
+    rptr = asm_img.read_id_ptr("room_anim_lo", "room_anim_hi", room_id)
+    anim_ids = [asm_img.memory[rptr + i] for i in range(rcount)]
+    pool_count = asm_img.equates["ANIM_POOL_COUNT"]
+
+    def _read_u8(lbl: str, idx: int) -> int:
+        return asm_img.memory[asm_img.symbols[lbl] + idx]
+
+    def _read_u16(lbl_lo: str, lbl_hi: str, idx: int) -> int:
+        return asm_img.memory[asm_img.symbols[lbl_lo] + idx] | (
+            asm_img.memory[asm_img.symbols[lbl_hi] + idx] << 8
+        )
+
+    def _pattern_bytes(bank: int, pat_idx: int) -> bytes:
+        if pool_count <= 1:
+            return bytes(asm_img.memory[asm_img.symbols[f"anim_pool0_b{r}"] + pat_idx] for r in range(8))
+        out = bytearray(8)
+        for r in range(8):
+            ptr = _read_u16("anim_pb_lo", "anim_pb_hi", bank * 8 + r)
+            out[r] = asm_img.memory[ptr + pat_idx]
+        return bytes(out)
+
+    def _frame_patterns(aid: int) -> list[list[bytes]]:
+        nframes = _read_u8("anim_frames", aid)
+        nslots = _read_u8("anim_slots", aid)
+        flags = _read_u8("anim_flags", aid)
+        bank = flags & 0x7F
+        use_f2 = bool(flags & 0x80)
+        dptr = _read_u16("anim_data_lo", "anim_data_hi", aid)
+        if not use_f2:
+            return [
+                [_pattern_bytes(bank, asm_img.memory[dptr + f * nslots + s]) for s in range(nslots)]
+                for f in range(nframes)
+            ]
+        # Form 2: reconstruct per-frame slots cleanly starting from frame 0 and applying cyclic deltas
+        cur_pats = list(asm_img.memory[dptr : dptr + nslots])
+        frames_out: list[list[bytes]] = [[_pattern_bytes(bank, p) for p in cur_pats]]
+        dtbl = dptr + nslots
+        for k in range(1, nframes):
+            dp = asm_img.memory[dtbl + k] | (asm_img.memory[dtbl + nframes + k] << 8)
+            cnt = asm_img.memory[dp]
+            for pi in range(cnt):
+                cur_pats[asm_img.memory[dp + 1 + 2 * pi]] = asm_img.memory[dp + 2 + 2 * pi]
+            frames_out.append([_pattern_bytes(bank, p) for p in cur_pats])
+        # Verify cyclic delta 0 returns back cleanly to frame 0!
+        dp0 = asm_img.memory[dtbl] | (asm_img.memory[dtbl + nframes] << 8)
+        for pi in range(asm_img.memory[dp0]):
+            cur_pats[asm_img.memory[dp0 + 1 + 2 * pi]] = asm_img.memory[dp0 + 2 + 2 * pi]
+        assert [_pattern_bytes(bank, p) for p in cur_pats] == frames_out[0]
+        return frames_out
+
+    all_frames = {aid: _frame_patterns(aid) for aid in anim_ids}
+    counters = [_read_u8("anim_speed", aid) for aid in anim_ids]
+    frames = [0] * rcount
+    snapshots: list[dict[int, list[bytes]]] = [{aid: all_frames[aid][0] for aid in anim_ids}]
+
+    for _t in range(ticks):
+        for i, aid in enumerate(anim_ids):
+            counters[i] -= 1
+            if counters[i] == 0:
+                counters[i] = _read_u8("anim_speed", aid)
+                frames[i] = (frames[i] + 1) % _read_u8("anim_frames", aid)
+        snapshots.append({aid: all_frames[aid][frames[i]] for i, aid in enumerate(anim_ids)})
+    return snapshots
+
+
+def test_animation_compilation_forms_pooling_and_simulation(tmp_path: Path) -> None:
+    """Test constant-cell deduplication, within-object sharing, cross-object pool, and Form 1 vs Form 2."""
+    proj_dir = tmp_path / "anim_proj"
+    proj_dir.mkdir()
+
+    # Palette/tiles on a 20x4 sheet:
+    # Tile (0,0) = 0xAA [constant brick], Tile (1,0) = 0x00 [constant empty]
+    # Object 2 ('torch', 3x1, 3 frames, speed=2):
+    #   cell 0: const (0,0)=0xAA (shares static wall!)
+    #   cells 1 & 2: IDENTICAL varying seq -> shares 1 dedicated slot! (Form 1: S=1, F=3 -> 3B <= Form 2: 1+6+3*3=16B)
+    # Object 3 ('beacon', 4x1, 8 frames, speed=3):
+    #   cell 0: const 0xAA
+    #   cells 1..3: vary only 1 slot on each transition -> Form 2 (3 + 16 + 8*3 = 43B vs Form 1: 24B? Wait: make 6x1, 6 slots, 8 frames!)
+    #   6 slots x 8 frames: Form 1 = 48B; Form 2 with 1 change/frame = 6 + 16 + 8*3 = 46B < 48B -> FORM 2!
+    # Object 4 ('echo', 1x1, 2 frames, speed=2):
+    #   reuses exact same pattern bytes as torch frame 0/1 -> tests cross-object pattern pooling!
+    tiles: dict[tuple[int, int], int] = {(0, 0): 0xAA, (1, 0): 0x00}
+    # torch frames (y=0, width=3 at x=2,5,8): col 0 is 0xAA, cols 1&2 equal
+    for f, fx in enumerate((2, 5, 8)):
+        tiles[(fx, 0)] = 0xAA
+        tiles[(fx + 1, 0)] = 0x20 + f + 1
+        tiles[(fx + 2, 0)] = 0x20 + f + 1
+    # echo at y=0, x=11 (f0) and x=12 (f1) matching torch's varying pattern 0x21 and 0x22
+    tiles[(11, 0)] = 0x21
+    tiles[(12, 0)] = 0x22
+    # Clean 1-change cyclic walk over 7 slots in 14 frames:
+    # f=1..7 flip slots 0..6 ON; f=8..13 flip slots 0..5 OFF; f=0 flips slot 6 OFF -> 1 change/frame!
+    # F1 = 7 * 14 = 98 B; F2 = 7 + 28 + 14 * 3 = 77 B < 98 B!
+    cur = [0x40 + i * 2 for i in range(7)]
+    for f in range(14):
+        if f == 0:
+            cur = [0x40 + i * 2 for i in range(7)]
+        elif 1 <= f <= 7:
+            cur[f - 1] ^= 0x80
+        else:
+            cur[f - 8] ^= 0x80
+        for dx in range(7):
+            tiles[(dx, 1 + f)] = cur[dx]
+
+    def tile_fn(gx: int, gy: int) -> list[list[int]]:
+        v = tiles.get((gx, gy), 0)
+        return [[v & 3, (v >> 2) & 3, (v >> 4) & 3, (v >> 6) & 3] for _ in range(8)]
+
+    _write_png(proj_dir / "g.png", 16, 16, tile_fn)
+    doc: dict[str, Any] = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "grp",
+                "image": "g.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 10, "colpf1": 20, "colpf2": 30, "colpf3": 40}],
+            }
+        ],
+        "objects": [
+            {
+                "id": 1,
+                "name": "wall",
+                "group": "grp",
+                "tags": [],
+                "non-blockable": False,
+                "colpf3": False,
+                "animation_speed": 0,
+                "frames": [{"x": 0, "y": 0, "w": 1, "h": 1}],
+            },
+            {
+                "id": 2,
+                "name": "torch",
+                "group": "grp",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": True,
+                "animation_speed": 2,
+                "frames": [{"x": fx, "y": 0, "w": 3, "h": 1} for fx in (2, 5, 8)],
+            },
+            {
+                "id": 3,
+                "name": "beacon",
+                "group": "grp",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 3,
+                "frames": [{"x": 0, "y": 1 + f, "w": 7, "h": 1} for f in range(14)],
+            },
+            {
+                "id": 4,
+                "name": "echo",
+                "group": "grp",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 2,
+                "frames": [{"x": 11, "y": 0, "w": 1, "h": 1}, {"x": 12, "y": 0, "w": 1, "h": 1}],
+            },
+        ],
+        "rooms": [
+            {
+                "id": 1,
+                "name": "R_Static",
+                "pos": [0, 0],
+                "row_groups": ["grp"],
+                "placed": [{"object": 1, "x": 0, "y": 0}],
+            },
+            {
+                "id": 2,
+                "name": "R_Anim",
+                "pos": [1, 0],
+                "row_groups": ["grp"],
+                "placed": [
+                    {"object": 2, "x": 2, "y": 2},
+                    {"object": 2, "x": 10, "y": 6},
+                    {"object": 3, "x": 0, "y": 10},
+                    {"object": 4, "x": 30, "y": 10},
+                ],
+            },
+        ],
+        "teleports": [],
+        "start": {"room": 2, "x": 1, "y": 1},
+    }
+    yfile = proj_dir / "rooms.yaml"
+    yfile.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "out_anim"
+    res = compile_rooms(yfile, out_dir=out_dir)
+
+    rep = res.report
+    assert rep.anim_count == 3
+    assert rep.anim_pool_count == 1
+    assert rep.max_room_anims == 3
+    # grp: 1 static (0xAA) + 1 (torch shared) + 7 (beacon) + 1 (echo) = 10 total!
+    assert rep.group_glyph_breakdown == [("grp", 10, 1, 9)]
+    # torch = Form 1, beacon = Form 2 (77 B < 98 B), echo = Form 1
+    assert rep.anim_stats[0].form == "form1"
+    assert rep.anim_stats[1].form == "form2"
+    assert rep.anim_stats[1].encoded_bytes == 77
+    assert rep.anim_stats[1].naive_bytes == 784
+    assert rep.anim_frame_dedup_bytes < rep.anim_frame_raw_bytes
+    # Cross-object pooling: torch(3 distinct) + beacon(14 distinct) + echo(0 extra because reused from torch!) = 17 patterns!
+    assert rep.anim_pattern_count == 17
+
+    asm_img = parse_generated_asm(out_dir)
+    assert asm_img.equates["ANIM_COUNT"] == 3
+    assert asm_img.equates["ANIM_POOL_COUNT"] == 1
+    assert asm_img.equates["MAX_ROOM_FORM1_SLOTS"] == 2  # torch(1) + echo(1), Form 2 uses 0!
+
+    # Constant cell of torch uses static code 1 (+128 colpf3 -> $81); varying cells 1 & 2 share code 2 (+128 -> $82)
+    t_ptr = asm_img.read_id_ptr("obj_data_lo", "obj_data_hi", 2)
+    assert list(asm_img.memory[t_ptr : t_ptr + 3]) == [0x81, 0x82, 0x82]
+    assert asm_img.read_id_byte("anim_slots", 0) if "anim_slots" in asm_img.equates else asm_img.memory[asm_img.symbols["anim_slots"]] == 1
+
+    # Simulate both Form 1 and Form 2 from ASM and verify exact charset slot progression
+    snaps = simulate_room_animations_from_asm(asm_img, 2, 12)
+    ch_base = asm_img.symbols["charset_grp"]
+    # Initial charset at dedicated codes 2 (torch), 3..9 (beacon), 10 (echo) matches tick 0!
+    assert [bytes(asm_img.memory[ch_base + 2 * 8 : ch_base + 3 * 8])] == snaps[0][0]
+    assert [bytes(asm_img.memory[ch_base + c * 8 : ch_base + (c + 1) * 8]) for c in range(3, 10)] == snaps[0][1]
+    assert snaps[2][0] != snaps[0][0]
+    assert snaps[6][0] == snaps[0][0]  # torch wraps after 3 * 2 = 6 ticks
+    assert snaps[3][1] != snaps[0][1]  # beacon steps every 3 ticks
+
+
+def test_animation_only_group_without_png_and_pool_split(tmp_path: Path) -> None:
+    """Verify missing-PNG YAML dedicated glyphs compilation AND >256-pattern deterministic pool split."""
+    proj_dir = tmp_path / "nopng"
+    proj_dir.mkdir()
+    f0 = "1122334455667788"
+    f1 = "8877665544332211"
+    doc: dict[str, Any] = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "fx",
+                "image": "missing_ok.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+                "glyphs": [
+                    {"code": 1, "data": f0, "object": 1, "cells": [[0, 0]], "frames": [f0, f1]}
+                ],
+            }
+        ],
+        "objects": [
+            {
+                "id": 1,
+                "name": "spark",
+                "group": "fx",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 4,
+                "frames": [{"x": 0, "y": 0, "w": 1, "h": 1}, {"x": 1, "y": 0, "w": 1, "h": 1}],
+            }
+        ],
+        "rooms": [{"id": 1, "name": "r", "pos": [0, 0], "row_groups": ["fx"], "placed": [{"object": 1, "x": 1, "y": 1}]}],
+        "teleports": [],
+        "start": {"room": 1, "x": 0, "y": 0},
+    }
+    yfile = proj_dir / "rooms.yaml"
+    yfile.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "out_nopng"
+    res = compile_rooms(yfile, out_dir=out_dir)
+    assert res.report.anim_count == 1
+    asm_img = parse_generated_asm(out_dir)
+    snaps = simulate_room_animations_from_asm(asm_img, 1, 4)
+    assert snaps[0][0] == [bytes.fromhex(f0)]
+    assert snaps[4][0] == [bytes.fromhex(f1)]
+
+    # Now test deterministic pool split (> 256 distinct patterns across animated objects -> ANIM_POOL_COUNT >= 2)
+    split_dir = tmp_path / "split"
+    split_dir.mkdir()
+    # Build 20x16 tile PNG where every tile (gx, gy) produces a unique 8-byte pattern: [1+gx, 1+gy, ...]
+    def _pat_tile(gx: int, gy: int) -> list[list[int]]:
+        v = gy * 20 + gx + 1
+        rows = []
+        for py in range(8):
+            val = ((v >> 8) + 1) if py == 7 else ((v + py * 31) & 0xFF or 1)
+            rows.append([val & 3, (val >> 2) & 3, (val >> 4) & 3, (val >> 6) & 3])
+        return rows
+
+    _write_png(split_dir / "big.png", 20, 16, _pat_tile)
+    # Two animated objects: obj 1 has 1x10 (10 slots) x 16 frames = 160 distinct patterns;
+    # obj 2 has 1x8 (8 slots) x 16 frames = 128 distinct patterns -> 160 + 128 = 288 > 256 -> split into 2 banks!
+    # Total dedicated glyphs in 'g' = 18 <= 127!
+    big_doc = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "g",
+                "image": "big.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+            }
+        ],
+        "objects": [
+            {
+                "id": 1,
+                "name": "big_a",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 2,
+                "frames": [{"x": f, "y": 0, "w": 1, "h": 10} for f in range(16)],
+            },
+            {
+                "id": 2,
+                "name": "big_b",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 3,
+                "frames": [{"x": f, "y": 10, "w": 1, "h": 6} for f in range(16)],
+            },
+        ],
+        "rooms": [
+            {
+                "id": 1,
+                "name": "rs",
+                "pos": [0, 0],
+                "row_groups": ["g"],
+                "placed": [{"object": 1, "x": 0, "y": 0}, {"object": 2, "x": 5, "y": 0}],
+            }
+        ],
+        "teleports": [],
+        "start": {"room": 1, "x": 0, "y": 0},
+    }
+    # 10*16 = 160 patterns (obj 1) + 6*16 = 96 -> total 256! Wait add 1 frame or make big_b h=6 + obj 3 -> make frames count = 16 on h=6? Make big_a y=0 h=10 (x=0..15 -> 160), big_b x=0..15 y=10 h=6 -> make big_a x=0..16 or 17 -> png width=20, max f=16, so add obj 3 (id=3, x=16, y=0..1, 1x2x2=4 -> 260 > 256)!
+    big_doc["objects"].append(
+        {
+            "id": 3,
+            "name": "big_c",
+            "group": "g",
+            "tags": [],
+            "non-blockable": True,
+            "colpf3": False,
+            "animation_speed": 4,
+            "frames": [{"x": 17, "y": 0, "w": 1, "h": 1}, {"x": 18, "y": 0, "w": 1, "h": 1}],
+        }
+    )
+    big_doc["rooms"][0]["placed"].append({"object": 3, "x": 10, "y": 0})
+    ysplit = split_dir / "rooms.yaml"
+    ysplit.write_text(yaml.safe_dump(big_doc, sort_keys=False), encoding="utf-8")
+    out_split = tmp_path / "out_split"
+    res_split = compile_rooms(ysplit, out_dir=out_split)
+    assert res_split.report.anim_pool_count == 2
+    assert res_split.report.anim_pattern_count > 256
+    asm_split = parse_generated_asm(out_split)
+    assert "anim_pb_lo" in asm_split.symbols
+    snaps_split = simulate_room_animations_from_asm(asm_split, 1, 4)
+    assert snaps_split[2][0] != snaps_split[0][0]
+    assert snaps_split[3][1] != snaps_split[0][1]
+    assert snaps_split[4][2] != snaps_split[0][2]
+
+
+def test_animation_compile_errors_and_mads(tmp_path: Path) -> None:
+    """Reject >16 frames, size mismatches, foreign-group animated placement, and assemble animations.asm."""
+    proj_dir = tmp_path / "aerr"
+    proj_dir.mkdir()
+    tile_a_fn = lambda gx, gy: _unique_tile(1 + gy * 8 + gx)
+    _write_png(proj_dir / "a.png", 8, 2, tile_a_fn)
+    _write_png(proj_dir / "b.png", 4, 1, lambda gx, _gy: _unique_tile(50 + gx))
+    base: dict[str, Any] = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "ga",
+                "image": "a.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+            },
+            {
+                "name": "gb",
+                "image": "b.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 5, "colpf1": 6, "colpf2": 7, "colpf3": 8}],
+            },
+        ],
+        "objects": [
+            {
+                "id": 1,
+                "name": "torch",
+                "group": "ga",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 5,
+                "frames": [{"x": 0, "y": 0, "w": 1, "h": 1}, {"x": 1, "y": 0, "w": 1, "h": 1}],
+            }
+        ],
+        "rooms": [
+            {
+                "id": 1,
+                "name": "r1",
+                "pos": [0, 0],
+                "row_groups": ["ga"] * 12 + ["gb"] * 12,
+                "placed": [{"object": 1, "x": 2, "y": 2}],
+            }
+        ],
+        "teleports": [],
+        "start": {"room": 1, "x": 0, "y": 0},
+    }
+    import copy
+
+    def _expect_err(mut, substr: str) -> None:
+        d = copy.deepcopy(base)
+        mut(d)
+        yf = proj_dir / "err.yaml"
+        yf.write_text(yaml.safe_dump(d, sort_keys=False), encoding="utf-8")
+        out_bad = tmp_path / "never_anim_out"
+        with pytest.raises(RoomCompileError) as ei:
+            compile_rooms(yf, out_dir=out_bad)
+        assert substr in str(ei.value).lower()
+        assert not out_bad.exists()
+
+    _expect_err(
+        lambda d: d["objects"][0].__setitem__("frames", [{"x": 0, "y": 0, "w": 1, "h": 1}] * 17),
+        "16",
+    )
+    _expect_err(
+        lambda d: d["objects"][0]["frames"][1].__setitem__("w", 2),
+        "differs",
+    )
+    _expect_err(
+        lambda d: d["rooms"][0]["placed"].__setitem__(0, {"object": 1, "x": 2, "y": 15}),
+        "animated",
+    )
+
+    # Valid case assembles cleanly with MADS
+    mads_bin = _find_mads()
+    if mads_bin is None:
+        pytest.skip("MADS not installed")
+    yf_ok = proj_dir / "ok.yaml"
+    yf_ok.write_text(yaml.safe_dump(base, sort_keys=False), encoding="utf-8")
+    out_ok = tmp_path / "ok_out"
+    compile_rooms(yf_ok, out_dir=out_ok)
+    h = tmp_path / "anim_mads.asm"
+    h.write_text(
+        "\n".join(
+            [
+                f"    icl '{(out_ok / 'rooms_defs.asm').as_posix()}'",
+                "    org $2000",
+                f"    icl '{(out_ok / 'objects.asm').as_posix()}'",
+                f"    icl '{(out_ok / 'rooms.asm').as_posix()}'",
+                f"    icl '{(out_ok / 'animations.asm').as_posix()}'",
+                "    org $4000",
+                f"    icl '{(out_ok / 'charsets.asm').as_posix()}'",
+                f"    icl '{(out_ok / 'styles.asm').as_posix()}'",
+                "    org $02E0",
+                "    .word $2000",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        [str(mads_bin), str(h), "-d:ROOMS_ALIGN_CHARSETS=1", f"-o:{tmp_path / 'anim.xex'}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, f"MADS failed:\n{proc.stdout}\n{proc.stderr}"
+

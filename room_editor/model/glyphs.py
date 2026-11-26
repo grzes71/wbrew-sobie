@@ -11,6 +11,8 @@ from room_editor.model.palette import PalPaletteTable, Palette
 GLYPH_WIDTH = 4
 GLYPH_HEIGHT = 8
 MAX_GLYPHS_PER_GROUP = 127
+MAX_OBJECT_FRAMES = 16
+MAX_ANIMATION_SPEED = 255
 EMPTY_GLYPH_BYTES = b"\x00" * GLYPH_HEIGHT
 DEFAULT_PIXEL_MAPPING: tuple[int, int, int, int] = (0, 1, 2, 3)
 
@@ -276,7 +278,15 @@ class GlyphEntry:
 
     code: int
     data: bytes
-    src: tuple[int, int]
+    src: tuple[int, int] | None = None
+    object_id: int | None = None
+    cells: tuple[tuple[int, int], ...] = ()
+    frames: tuple[bytes, ...] = ()
+
+    @property
+    def is_dedicated(self) -> bool:
+        """Return True iff this entry is a dedicated animation slot owned by an object."""
+        return self.object_id is not None
 
     def __post_init__(self) -> None:
         code = int(self.code)
@@ -285,16 +295,48 @@ class GlyphEntry:
         raw = bytes(self.data) if isinstance(self.data, bytearray) else self.data
         if len(raw) != GLYPH_HEIGHT:
             raise ValueError(f"Glyph data must be {GLYPH_HEIGHT} bytes; got {len(raw)}.")
-        if raw == EMPTY_GLYPH_BYTES:
-            raise ValueError("Glyph entry cannot store the empty (all-00) glyph.")
+        if self.object_id is None:
+            if raw == EMPTY_GLYPH_BYTES:
+                raise ValueError("Static glyph entry cannot store the empty (all-00) glyph.")
+            if self.src is None:
+                raise ValueError("Static glyph entry requires a 2-element 'src' coordinate.")
+            object.__setattr__(self, "src", (int(self.src[0]), int(self.src[1])))
+            object.__setattr__(self, "object_id", None)
+            object.__setattr__(self, "cells", ())
+            object.__setattr__(self, "frames", ())
+        else:
+            if not self.cells:
+                raise ValueError("Dedicated glyph entry requires at least one (cx, cy) cell.")
+            norm_cells = tuple((int(cx), int(cy)) for cx, cy in self.cells)
+            norm_frames = tuple(bytes(f) for f in self.frames)
+            if len(norm_frames) < 2:
+                raise ValueError("Dedicated glyph entry requires at least 2 frame byte blocks.")
+            for f_idx, f_bytes in enumerate(norm_frames):
+                if len(f_bytes) != GLYPH_HEIGHT:
+                    raise ValueError(
+                        f"Dedicated glyph frame {f_idx} must be {GLYPH_HEIGHT} bytes; got {len(f_bytes)}."
+                    )
+            if norm_frames[0] != raw:
+                raise ValueError("Dedicated glyph entry 'data' must equal frames[0].")
+            if len(set(norm_frames)) < 2:
+                raise ValueError("Dedicated glyph entry must vary across at least two frames.")
+            object.__setattr__(self, "object_id", int(self.object_id))
+            object.__setattr__(self, "cells", norm_cells)
+            object.__setattr__(self, "frames", norm_frames)
+            if self.src is not None:
+                object.__setattr__(self, "src", (int(self.src[0]), int(self.src[1])))
         object.__setattr__(self, "code", code)
         object.__setattr__(self, "data", raw)
-        object.__setattr__(self, "src", (int(self.src[0]), int(self.src[1])))
 
     @property
     def data_hex(self) -> str:
         """16-character uppercase hex representation of the 8 glyph bytes."""
         return self.data.hex().upper()
+
+    @property
+    def frames_hex(self) -> tuple[str, ...]:
+        """Tuple of 16-character uppercase hex strings for every frame of a dedicated slot."""
+        return tuple(f.hex().upper() for f in self.frames)
 
     @property
     def has_value_11(self) -> bool:
@@ -384,16 +426,25 @@ class GroupGlyphAnalysis:
 
     table: GlyphTable
     total_unique_needed: int = 0
+    static_glyph_count: int = 0
+    dedicated_slot_count: int = 0
     object_chars: dict[int, list[list[int]]] = field(default_factory=dict)
+    object_dedicated_slots: dict[int, list[tuple[int, tuple[tuple[int, int], ...]]]] = field(
+        default_factory=dict
+    )
+    object_cell_stats: dict[int, tuple[int, int, int]] = field(default_factory=dict)
     invalid_region_object_ids: set[int] = field(default_factory=set)
+    invalid_frame_size_object_ids: set[int] = field(default_factory=set)
+    too_many_frames_object_ids: set[int] = field(default_factory=set)
     empty_object_ids: set[int] = field(default_factory=set)
     overflow_object_ids: set[int] = field(default_factory=set)
     colpf3_no_effect_object_ids: set[int] = field(default_factory=set)
+    no_varying_cells_object_ids: set[int] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
 class GlyphBudgetCheck:
-    """Result of checking a stamp region against the 127-glyph group limit."""
+    """Result of checking a stamp region or animated object against the 127-glyph group limit."""
 
     existing_used: int
     new_glyphs: int
@@ -404,6 +455,7 @@ class GlyphBudgetCheck:
     cell_count_valid: bool
     ok: bool
     error_message: str = ""
+    missing_slots: int = 0
 
 
 @dataclass(frozen=True)

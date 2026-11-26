@@ -94,3 +94,18 @@
     pla                         ; 4  (72) Restore A
     rti                         ; 6  (78) Return from interrupt
 .endp
+
+; ------------------------------------------------------------------------------
+; game_vbi_deferred — Deferred VBI handler for STATE_GAME (VVBLKD)
+; Fast-exits in 9 cycles on static rooms (when zp_anim_active == 0) before
+; clearing zp_dli_idx and jumping to XITVBV.
+; ------------------------------------------------------------------------------
+.proc game_vbi_deferred
+    lda zp_anim_active          ; 3  (3) Any active room animations?
+    beq @static_exit            ; 2/3 (6) 9 cycles incl. @static_exit reset path check
+    jsr anim_tick               ; 6  (11) Update counters + budgeted charset copies
+@static_exit
+    lda #0                      ; 2  (8)  Reset per-frame DLI index at top of VBLANK
+    sta zp_dli_idx              ; 3  (11)
+    jmp XITVBV                  ; 3  (14) Exit OS Deferred VBI
+.endp

@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from room_editor.model.glyphs import (
     DEFAULT_PIXEL_MAPPING,
     EMPTY_GLYPH_BYTES,
     GLYPH_HEIGHT,
     GLYPH_WIDTH,
+    MAX_ANIMATION_SPEED,
     MAX_GLYPHS_PER_GROUP,
+    MAX_OBJECT_FRAMES,
     GlyphBudgetCheck,
     GlyphEntry,
     GlyphTable,
@@ -30,7 +32,7 @@ from room_editor.model.palette import (
     Palette,
 )
 
-PROJECT_VERSION = 4
+PROJECT_VERSION = 5
 ROOM_WIDTH = 40
 ROOM_HEIGHT = 24
 ANTIC4_PIXEL_ASPECT_X = 2
@@ -118,44 +120,106 @@ class ObjectGroup:
         return f"{base}_{idx}"
 
 
-@dataclass
+@dataclass(init=False)
 class GameObject:
-    """Reusable rectangular stamp cut from an ObjectGroup's indexed PNG image."""
+    """Reusable rectangular stamp cut from an ObjectGroup's indexed PNG image, with 1..16 frames."""
 
     id: int
     name: str
     group: str
-    tags: list[str] = field(default_factory=list)
+    tags: list[str]
     non_blockable: bool = False
     pickable: bool = False
     colpf3: bool = False
-    region: StampRegion = field(default_factory=lambda: StampRegion(0, 0, 1, 1))
+    frames: list[StampRegion] = field(default_factory=lambda: [StampRegion(0, 0, 1, 1)])
+    animation_speed: int = 0
     chars: list[list[int]] = field(default_factory=list, repr=False, compare=False)
+    dedicated_slots: list[tuple[int, tuple[tuple[int, int], ...]]] = field(
+        default_factory=list, repr=False, compare=False
+    )
+    constant_cell_count: int = field(default=0, repr=False, compare=False)
+    varying_cell_count: int = field(default=0, repr=False, compare=False)
 
-    def __post_init__(self) -> None:
-        self.id = int(self.id)
-        self.non_blockable = bool(self.non_blockable)
-        self.pickable = bool(self.pickable)
-        self.colpf3 = bool(self.colpf3)
-        if not isinstance(self.region, StampRegion):
-            self.region = StampRegion.from_dict(self.region)
-        if not self.chars and self.w > 0 and self.h > 0:
+    def __init__(
+        self,
+        id: int,
+        name: str,
+        group: str,
+        tags: list[str] | None = None,
+        non_blockable: bool = False,
+        pickable: bool = False,
+        colpf3: bool = False,
+        frames: Sequence[StampRegion | dict[str, Any]] | None = None,
+        animation_speed: int = 0,
+        *,
+        region: StampRegion | dict[str, Any] | None = None,
+        chars: list[list[int]] | None = None,
+    ) -> None:
+        self.id = int(id)
+        self.name = name
+        self.group = group
+        self.tags = list(tags) if tags is not None else []
+        self.non_blockable = bool(non_blockable)
+        self.pickable = bool(pickable)
+        self.colpf3 = bool(colpf3)
+        if frames is not None:
+            self.frames = [
+                f if isinstance(f, StampRegion) else StampRegion.from_dict(f)
+                for f in frames
+            ]
+        elif region is not None:
+            reg = region if isinstance(region, StampRegion) else StampRegion.from_dict(region)
+            self.frames = [reg]
+        else:
+            self.frames = [StampRegion(0, 0, 1, 1)]
+        self.animation_speed = int(animation_speed)
+        if chars is not None:
+            self.chars = [list(r) for r in chars]
+        elif self.w > 0 and self.h > 0:
             self.chars = [[0] * self.w for _ in range(self.h)]
+        else:
+            self.chars = []
+        self.dedicated_slots = []
+        self.constant_cell_count = 0
+        self.varying_cell_count = 0
+
+    @property
+    def region(self) -> StampRegion:
+        """Primary (frame 0) stamp region."""
+        return self.frames[0] if self.frames else StampRegion(0, 0, 0, 0)
+
+    @region.setter
+    def region(self, value: StampRegion) -> None:
+        reg = value if isinstance(value, StampRegion) else StampRegion.from_dict(value)
+        if self.frames:
+            self.frames[0] = reg
+        else:
+            self.frames = [reg]
+
+    @property
+    def frame_count(self) -> int:
+        """Number of frames defined for this object (1..16)."""
+        return len(self.frames)
+
+    @property
+    def is_animated(self) -> bool:
+        """Return True iff object has at least 2 frames AND animation_speed > 0."""
+        return len(self.frames) >= 2 and self.animation_speed > 0
 
     @property
     def w(self) -> int:
         """Stamp width in character cells (4 pixels each)."""
-        return self.region.w
+        return self.frames[0].w if self.frames else 0
 
     @property
     def h(self) -> int:
         """Stamp height in character cells (8 pixels each)."""
-        return self.region.h
+        return self.frames[0].h if self.frames else 0
 
     @property
     def cell_count(self) -> int:
         """Total number of character cells (w * h)."""
-        return self.region.cell_count
+        return self.frames[0].cell_count if self.frames else 0
 
     def occupied_offsets(self) -> list[tuple[int, int]]:
         """Return (dx, dy) offsets of non-empty (non-zero) derived character cells."""
@@ -302,91 +366,223 @@ def _analyze_group_glyphs(
     grp: ObjectGroup,
     group_objects: list[GameObject],
 ) -> GroupGlyphAnalysis:
-    """Deterministically assign codes 1..127 and derive object char matrices for one group."""
+    """Deterministically assign codes 1..127 and derive object chars/dedicated slots."""
     analysis = GroupGlyphAnalysis(table=GlyphTable(()))
     if grp.image is None or not is_valid_pixel_mapping(grp.pixel_mapping):
         for obj in group_objects:
             analysis.object_chars[obj.id] = _zero_chars(obj)
         return analysis
 
-    all_unique: set[bytes] = set()
-    table_map: dict[bytes, int] = {}
+    all_static_unique: set[bytes] = set()
+    total_dedicated_needed = 0
+    static_pool: dict[bytes, int] = {}
     entries: list[GlyphEntry] = []
 
     ordered = sorted(enumerate(group_objects), key=lambda pair: (pair[1].id, pair[0]))
     for _, obj in ordered:
-        if (
-            obj.cell_count < 1
-            or obj.cell_count > MAX_OBJECT_CELLS
-            or not obj.region.is_within_image(grp.image)
-        ):
+        if len(obj.frames) < 1 or len(obj.frames) > MAX_OBJECT_FRAMES:
+            analysis.too_many_frames_object_ids.add(obj.id)
+            analysis.object_chars[obj.id] = _zero_chars(obj)
+            continue
+
+        base = obj.frames[0]
+        if base.w < 1 or base.h < 1 or base.cell_count > MAX_OBJECT_CELLS:
             analysis.invalid_region_object_ids.add(obj.id)
             analysis.object_chars[obj.id] = _zero_chars(obj)
             continue
 
-        raw_grid: list[list[bytes]] = []
-        new_in_obj: list[bytes] = []
-        seen_in_obj: set[bytes] = set()
-        has_non_empty = False
-
-        for dy in range(obj.h):
-            row_bytes: list[bytes] = []
-            for dx in range(obj.w):
-                gb = grp.image.extract_glyph_bytes(
-                    obj.region.x + dx,
-                    obj.region.y + dy,
-                    grp.pixel_mapping,
-                )
-                row_bytes.append(gb)
-                if gb != EMPTY_GLYPH_BYTES:
-                    has_non_empty = True
-                    all_unique.add(gb)
-                    if gb not in table_map and gb not in seen_in_obj:
-                        seen_in_obj.add(gb)
-                        new_in_obj.append(gb)
-            raw_grid.append(row_bytes)
-
-        if not has_non_empty:
-            analysis.empty_object_ids.add(obj.id)
+        if any((f.w, f.h) != (base.w, base.h) for f in obj.frames[1:]):
+            analysis.invalid_frame_size_object_ids.add(obj.id)
             analysis.object_chars[obj.id] = _zero_chars(obj)
             continue
 
-        if len(entries) + len(new_in_obj) > MAX_GLYPHS_PER_GROUP:
-            analysis.overflow_object_ids.add(obj.id)
+        if any(not f.is_within_image(grp.image) for f in obj.frames):
+            analysis.invalid_region_object_ids.add(obj.id)
             analysis.object_chars[obj.id] = _zero_chars(obj)
             continue
 
-        chars: list[list[int]] = []
-        has_val_11 = False
-        for dy in range(obj.h):
-            row_codes: list[int] = []
-            for dx in range(obj.w):
-                gb = raw_grid[dy][dx]
-                if gb == EMPTY_GLYPH_BYTES:
-                    row_codes.append(0)
-                else:
-                    code = table_map.get(gb)
-                    if code is None:
-                        code = len(entries) + 1
-                        table_map[gb] = code
-                        entries.append(
-                            GlyphEntry(
-                                code=code,
-                                data=gb,
-                                src=(obj.region.x + dx, obj.region.y + dy),
+        if not obj.is_animated:
+            raw_grid: list[list[bytes]] = []
+            new_in_obj: list[bytes] = []
+            seen_in_obj: set[bytes] = set()
+            has_non_empty = False
+
+            for dy in range(obj.h):
+                row_bytes: list[bytes] = []
+                for dx in range(obj.w):
+                    gb = grp.image.extract_glyph_bytes(
+                        base.x + dx,
+                        base.y + dy,
+                        grp.pixel_mapping,
+                    )
+                    row_bytes.append(gb)
+                    if gb != EMPTY_GLYPH_BYTES:
+                        has_non_empty = True
+                        all_static_unique.add(gb)
+                        if gb not in static_pool and gb not in seen_in_obj:
+                            seen_in_obj.add(gb)
+                            new_in_obj.append(gb)
+                raw_grid.append(row_bytes)
+
+            if not has_non_empty:
+                analysis.empty_object_ids.add(obj.id)
+                analysis.object_chars[obj.id] = _zero_chars(obj)
+                continue
+
+            if len(entries) + len(new_in_obj) > MAX_GLYPHS_PER_GROUP:
+                analysis.overflow_object_ids.add(obj.id)
+                analysis.object_chars[obj.id] = _zero_chars(obj)
+                continue
+
+            chars: list[list[int]] = []
+            has_val_11 = False
+            for dy in range(obj.h):
+                row_codes: list[int] = []
+                for dx in range(obj.w):
+                    gb = raw_grid[dy][dx]
+                    if gb == EMPTY_GLYPH_BYTES:
+                        row_codes.append(0)
+                    else:
+                        code = static_pool.get(gb)
+                        if code is None:
+                            code = len(entries) + 1
+                            static_pool[gb] = code
+                            entries.append(
+                                GlyphEntry(
+                                    code=code,
+                                    data=gb,
+                                    src=(base.x + dx, base.y + dy),
+                                )
                             )
-                        )
-                    if glyph_has_value_11(gb):
-                        has_val_11 = True
-                    row_codes.append(code + 128 if obj.colpf3 else code)
-            chars.append(row_codes)
+                        if glyph_has_value_11(gb):
+                            has_val_11 = True
+                        row_codes.append(code + 128 if obj.colpf3 else code)
+                chars.append(row_codes)
 
-        analysis.object_chars[obj.id] = chars
-        if obj.colpf3 and not has_val_11:
-            analysis.colpf3_no_effect_object_ids.add(obj.id)
+            analysis.object_chars[obj.id] = chars
+            if obj.colpf3 and not has_val_11:
+                analysis.colpf3_no_effect_object_ids.add(obj.id)
+        else:
+            # Animated object: classify cells into constant (shared static pool) vs
+            # varying (dedicated per-sequence slots shared only within this object).
+            frame_grids: list[list[list[bytes]]] = []
+            for frame_reg in obj.frames:
+                fgrid: list[list[bytes]] = []
+                for dy in range(obj.h):
+                    frow = [
+                        grp.image.extract_glyph_bytes(
+                            frame_reg.x + dx,
+                            frame_reg.y + dy,
+                            grp.pixel_mapping,
+                        )
+                        for dx in range(obj.w)
+                    ]
+                    fgrid.append(frow)
+                frame_grids.append(fgrid)
+
+            cell_seqs: list[list[tuple[bytes, ...]]] = []
+            cell_is_varying: list[list[bool]] = []
+            seq_cells: dict[tuple[bytes, ...], list[tuple[int, int]]] = {}
+            new_static_in_obj: list[bytes] = []
+            seen_new_static: set[bytes] = set()
+            const_cnt = 0
+            vary_cnt = 0
+            has_non_empty = False
+            has_val_11 = False
+
+            for dy in range(obj.h):
+                row_seqs: list[tuple[bytes, ...]] = []
+                row_vary: list[bool] = []
+                for dx in range(obj.w):
+                    seq = tuple(frame_grids[f_idx][dy][dx] for f_idx in range(len(obj.frames)))
+                    row_seqs.append(seq)
+                    for gb in seq:
+                        if gb != EMPTY_GLYPH_BYTES:
+                            has_non_empty = True
+                            if glyph_has_value_11(gb):
+                                has_val_11 = True
+                    if len(set(seq)) == 1:
+                        row_vary.append(False)
+                        const_cnt += 1
+                        gb = seq[0]
+                        if gb != EMPTY_GLYPH_BYTES:
+                            all_static_unique.add(gb)
+                            if gb not in static_pool and gb not in seen_new_static:
+                                seen_new_static.add(gb)
+                                new_static_in_obj.append(gb)
+                    else:
+                        row_vary.append(True)
+                        vary_cnt += 1
+                        seq_cells.setdefault(seq, []).append((dx, dy))
+                cell_seqs.append(row_seqs)
+                cell_is_varying.append(row_vary)
+
+            if not has_non_empty:
+                analysis.empty_object_ids.add(obj.id)
+                analysis.object_chars[obj.id] = _zero_chars(obj)
+                analysis.object_cell_stats[obj.id] = (const_cnt, vary_cnt, 0)
+                continue
+
+            total_dedicated_needed += len(seq_cells)
+            analysis.object_cell_stats[obj.id] = (const_cnt, vary_cnt, len(seq_cells))
+            if vary_cnt == 0:
+                analysis.no_varying_cells_object_ids.add(obj.id)
+
+            if len(entries) + len(new_static_in_obj) + len(seq_cells) > MAX_GLYPHS_PER_GROUP:
+                analysis.overflow_object_ids.add(obj.id)
+                analysis.object_chars[obj.id] = _zero_chars(obj)
+                continue
+
+            chars = [[0] * obj.w for _ in range(obj.h)]
+            seq_to_code: dict[tuple[bytes, ...], int] = {}
+            ded_slots: list[tuple[int, tuple[tuple[int, int], ...]]] = []
+
+            for dy in range(obj.h):
+                for dx in range(obj.w):
+                    seq = cell_seqs[dy][dx]
+                    if not cell_is_varying[dy][dx]:
+                        gb = seq[0]
+                        if gb == EMPTY_GLYPH_BYTES:
+                            continue
+                        code = static_pool.get(gb)
+                        if code is None:
+                            code = len(entries) + 1
+                            static_pool[gb] = code
+                            entries.append(
+                                GlyphEntry(
+                                    code=code,
+                                    data=gb,
+                                    src=(base.x + dx, base.y + dy),
+                                )
+                            )
+                        chars[dy][dx] = code + 128 if obj.colpf3 else code
+                    else:
+                        code = seq_to_code.get(seq)
+                        if code is None:
+                            code = len(entries) + 1
+                            seq_to_code[seq] = code
+                            cells_for_seq = tuple(seq_cells[seq])
+                            entries.append(
+                                GlyphEntry(
+                                    code=code,
+                                    data=seq[0],
+                                    object_id=obj.id,
+                                    cells=cells_for_seq,
+                                    frames=seq,
+                                )
+                            )
+                            ded_slots.append((code, cells_for_seq))
+                        chars[dy][dx] = code + 128 if obj.colpf3 else code
+
+            analysis.object_chars[obj.id] = chars
+            analysis.object_dedicated_slots[obj.id] = ded_slots
+            if obj.colpf3 and not has_val_11:
+                analysis.colpf3_no_effect_object_ids.add(obj.id)
 
     analysis.table = GlyphTable(tuple(entries))
-    analysis.total_unique_needed = len(all_unique)
+    analysis.static_glyph_count = len(all_static_unique)
+    analysis.dedicated_slot_count = total_dedicated_needed
+    analysis.total_unique_needed = len(all_static_unique) + total_dedicated_needed
     return analysis
 
 
@@ -420,7 +616,7 @@ class Project:
                         )
 
     def rebuild_glyph_tables(self) -> None:
-        """Recompute every group's derived GlyphTable and every object's derived chars."""
+        """Recompute every group's derived GlyphTable and every object's derived chars/animation data."""
         groups_by_name = {g.name: g for g in self.object_groups}
         objs_by_group: dict[str, list[GameObject]] = {g.name: [] for g in self.object_groups}
         for obj in self.objects:
@@ -428,6 +624,9 @@ class Project:
                 objs_by_group[obj.group].append(obj)
             else:
                 obj.chars = _zero_chars(obj)
+                obj.dedicated_slots = []
+                obj.constant_cell_count = 0
+                obj.varying_cell_count = 0
 
         for grp in self.object_groups:
             group_objs = objs_by_group.get(grp.name, [])
@@ -436,6 +635,10 @@ class Project:
             grp.glyph_analysis = analysis
             for obj in group_objs:
                 obj.chars = analysis.object_chars.get(obj.id, _zero_chars(obj))
+                obj.dedicated_slots = analysis.object_dedicated_slots.get(obj.id, [])
+                c_cnt, v_cnt, _d_cnt = analysis.object_cell_stats.get(obj.id, (0, 0, 0))
+                obj.constant_cell_count = c_cnt
+                obj.varying_cell_count = v_cnt
 
         # Any duplicate-named group still receives clean empty state
         seen: set[int] = set()
@@ -554,6 +757,13 @@ class Project:
         grp = self.get_group(obj.group)
         if grp is None:
             return f"Object '{obj.name}' references missing group '{obj.group}'."
+        if len(obj.frames) < 1 or len(obj.frames) > MAX_OBJECT_FRAMES:
+            return (
+                f"Object '{obj.name}' frame count {len(obj.frames)} must be in "
+                f"1..{MAX_OBJECT_FRAMES}."
+            )
+        if any((f.w, f.h) != (obj.w, obj.h) for f in obj.frames[1:]):
+            return f"Object '{obj.name}' has frames with mismatched sizes."
         if grp.image is None:
             if grp.image_status == "invalid":
                 return f"Group '{grp.name}' has an invalid PNG image: {grp.image_error}"
@@ -564,8 +774,8 @@ class Project:
             return f"Group '{grp.name}' has an invalid pixel mapping."
         if obj.cell_count < 1 or obj.cell_count > MAX_OBJECT_CELLS:
             return f"Object '{obj.name}' cell count {obj.cell_count} must be in 1..{MAX_OBJECT_CELLS}."
-        if not obj.region.is_within_image(grp.image):
-            return f"Object '{obj.name}' region is outside group '{grp.name}' image bounds."
+        if any(not f.is_within_image(grp.image) for f in obj.frames):
+            return f"Object '{obj.name}' frame region is outside group '{grp.name}' image bounds."
         analysis = grp.glyph_analysis
         if analysis is None:
             return f"Group '{grp.name}' glyph table is not built."
@@ -578,15 +788,16 @@ class Project:
             )
         return ""
 
-    def check_region_glyph_budget(
+    def check_object_glyph_budget(
         self,
         group_name: str,
-        region: StampRegion,
+        frames: Sequence[StampRegion],
+        animation_speed: int = 0,
         *,
         exclude_object_id: int | None = None,
         pixel_mapping: Sequence[int] | None = None,
     ) -> GlyphBudgetCheck:
-        """Check whether a candidate StampRegion fits in group_name's 127-glyph budget."""
+        """Check whether candidate object frames/speed fit in group_name's 127-glyph budget."""
         grp = self.get_group(group_name)
         if grp is None or grp.image is None:
             return GlyphBudgetCheck(
@@ -615,43 +826,24 @@ class Project:
                 error_message="Invalid pixel mapping (must be a permutation of 0..3).",
             )
 
-        existing_glyphs: set[bytes] = set()
-        for other in self.objects:
-            if other.group != group_name or other.id == exclude_object_id:
-                continue
-            if not other.region.is_within_image(grp.image) or other.cell_count > MAX_OBJECT_CELLS:
-                continue
-            for dy in range(other.h):
-                for dx in range(other.w):
-                    gb = grp.image.extract_glyph_bytes(
-                        other.region.x + dx,
-                        other.region.y + dy,
-                        mapping,
-                    )
-                    if gb != EMPTY_GLYPH_BYTES:
-                        existing_glyphs.add(gb)
-
-        existing_used = len(existing_glyphs)
+        # Recompute baseline used glyphs from scratch using the exact same rules
+        other_objs = [
+            o
+            for o in self.objects
+            if o.group == group_name and o.id != exclude_object_id
+        ]
+        probe_grp = ObjectGroup(
+            name=grp.name,
+            image_path=grp.image_path,
+            pixel_mapping=tuple(mapping),
+            palettes=list(grp.palettes),
+            image=grp.image,
+        )
+        baseline_analysis = _analyze_group_glyphs(probe_grp, other_objs)
+        existing_used = baseline_analysis.total_unique_needed
         free_slots = max(0, MAX_GLYPHS_PER_GROUP - existing_used)
-        cell_count_valid = 1 <= region.cell_count <= MAX_OBJECT_CELLS
-        region_in_bounds = region.is_within_image(grp.image)
 
-        if not cell_count_valid:
-            return GlyphBudgetCheck(
-                existing_used=existing_used,
-                new_glyphs=0,
-                total_used=existing_used,
-                free_slots=free_slots,
-                is_all_empty=True,
-                region_in_bounds=region_in_bounds,
-                cell_count_valid=False,
-                ok=False,
-                error_message=(
-                    f"Region size {region.w}x{region.h} ({region.cell_count} cells) "
-                    f"exceeds limit of {MAX_OBJECT_CELLS} cells."
-                ),
-            )
-        if not region_in_bounds:
+        if not frames or len(frames) > MAX_OBJECT_FRAMES:
             return GlyphBudgetCheck(
                 existing_used=existing_used,
                 new_glyphs=0,
@@ -659,26 +851,77 @@ class Project:
                 free_slots=free_slots,
                 is_all_empty=True,
                 region_in_bounds=False,
-                cell_count_valid=True,
+                cell_count_valid=False,
                 ok=False,
                 error_message=(
-                    f"Region ({region.x}, {region.y}) {region.w}x{region.h} "
-                    f"lies outside image bounds ({grp.image.glyph_cols}x{grp.image.glyph_rows} glyphs)."
+                    f"Frame count {len(frames)} must be between 1 and {MAX_OBJECT_FRAMES} "
+                    "(maximum 16 frames)."
                 ),
             )
 
-        cand_unique: set[bytes] = set()
-        for dy in range(region.h):
-            for dx in range(region.w):
-                gb = grp.image.extract_glyph_bytes(
-                    region.x + dx,
-                    region.y + dy,
-                    mapping,
-                )
-                if gb != EMPTY_GLYPH_BYTES:
-                    cand_unique.add(gb)
+        base = frames[0]
+        cell_count_valid = base.w >= 1 and base.h >= 1 and base.cell_count <= MAX_OBJECT_CELLS
+        if not cell_count_valid:
+            return GlyphBudgetCheck(
+                existing_used=existing_used,
+                new_glyphs=0,
+                total_used=existing_used,
+                free_slots=free_slots,
+                is_all_empty=True,
+                region_in_bounds=all(f.is_within_image(grp.image) for f in frames),
+                cell_count_valid=False,
+                ok=False,
+                error_message=(
+                    f"Region size {base.w}x{base.h} ({base.cell_count} cells) "
+                    f"exceeds limit of {MAX_OBJECT_CELLS} cells."
+                ),
+            )
 
-        if not cand_unique:
+        if any((f.w, f.h) != (base.w, base.h) for f in frames[1:]):
+            return GlyphBudgetCheck(
+                existing_used=existing_used,
+                new_glyphs=0,
+                total_used=existing_used,
+                free_slots=free_slots,
+                is_all_empty=True,
+                region_in_bounds=False,
+                cell_count_valid=False,
+                ok=False,
+                error_message=f"All frames must match the object size {base.w}x{base.h}.",
+            )
+
+        for idx, reg in enumerate(frames):
+            if not reg.is_within_image(grp.image):
+                return GlyphBudgetCheck(
+                    existing_used=existing_used,
+                    new_glyphs=0,
+                    total_used=existing_used,
+                    free_slots=free_slots,
+                    is_all_empty=True,
+                    region_in_bounds=False,
+                    cell_count_valid=True,
+                    ok=False,
+                    error_message=(
+                        f"Frame {idx} region ({reg.x}, {reg.y}) {reg.w}x{reg.h} "
+                        f"lies outside image bounds ({grp.image.glyph_cols}x{grp.image.glyph_rows} glyphs)."
+                    ),
+                )
+
+        cand_id = (
+            exclude_object_id
+            if exclude_object_id is not None
+            else (max((o.id for o in other_objs), default=0) + 1)
+        )
+        cand_obj = GameObject(
+            id=cand_id,
+            name="__budget_probe__",
+            group=grp.name,
+            frames=list(frames),
+            animation_speed=int(animation_speed),
+        )
+        after_analysis = _analyze_group_glyphs(probe_grp, other_objs + [cand_obj])
+        if cand_id in after_analysis.empty_object_ids:
+            is_animated = len(frames) >= 2 and int(animation_speed) > 0
             return GlyphBudgetCheck(
                 existing_used=existing_used,
                 new_glyphs=0,
@@ -688,11 +931,17 @@ class Project:
                 region_in_bounds=True,
                 cell_count_valid=True,
                 ok=False,
-                error_message="Selection contains only empty (00) glyphs and has nothing to draw.",
+                error_message=(
+                    "All frames contain only empty (00) glyphs."
+                    if is_animated
+                    else "Selection contains only empty (00) glyphs and has nothing to draw."
+                ),
             )
 
-        new_glyphs = len(cand_unique - existing_glyphs)
-        total_used = existing_used + new_glyphs
+        total_used = after_analysis.total_unique_needed
+        new_glyphs = total_used - existing_used
+
+        missing_slots = max(0, total_used - MAX_GLYPHS_PER_GROUP)
         if total_used > MAX_GLYPHS_PER_GROUP:
             return GlyphBudgetCheck(
                 existing_used=existing_used,
@@ -704,10 +953,12 @@ class Project:
                 cell_count_valid=True,
                 ok=False,
                 error_message=(
-                    f"Object would add {new_glyphs} new unique glyph(s), "
+                    f"Action would add {new_glyphs} new glyph(s), "
                     f"exceeding the {MAX_GLYPHS_PER_GROUP}-glyph limit "
-                    f"({free_slots} free slot(s) remaining; {existing_used}/{MAX_GLYPHS_PER_GROUP} used)."
+                    f"({missing_slots} slot(s) missing; {free_slots} free, "
+                    f"{existing_used}/{MAX_GLYPHS_PER_GROUP} used)."
                 ),
+                missing_slots=missing_slots,
             )
 
         return GlyphBudgetCheck(
@@ -720,6 +971,24 @@ class Project:
             cell_count_valid=True,
             ok=True,
             error_message="",
+            missing_slots=0,
+        )
+
+    def check_region_glyph_budget(
+        self,
+        group_name: str,
+        region: StampRegion,
+        *,
+        exclude_object_id: int | None = None,
+        pixel_mapping: Sequence[int] | None = None,
+    ) -> GlyphBudgetCheck:
+        """Check whether a candidate StampRegion fits in group_name's 127-glyph budget."""
+        return self.check_object_glyph_budget(
+            group_name,
+            [region],
+            animation_speed=0,
+            exclude_object_id=exclude_object_id,
+            pixel_mapping=pixel_mapping,
         )
 
     def check_mapping_change(
@@ -864,7 +1133,7 @@ class Project:
         y: int,
         ignore_indices: set[int] | None = None,
     ) -> tuple[bool, str]:
-        """Check whether placing obj_id at (x, y) is valid, in-bounds, and obeys overlap rules."""
+        """Check whether placing obj_id at (x, y) is valid, in-bounds, and obeys overlap/row rules."""
         obj = self.get_object(obj_id)
         if obj is None:
             return False, f"Unknown object ID {obj_id}."
@@ -874,10 +1143,20 @@ class Project:
         if x < 0 or y < 0 or x + obj.w > ROOM_WIDTH or y + obj.h > ROOM_HEIGHT:
             return False, f"Object extends outside the {ROOM_WIDTH}x{ROOM_HEIGHT} room bounds."
 
+        offsets = obj.occupied_offsets()
+        if obj.is_animated:
+            touched_rows = {y + dy for _dx, dy in offsets} if offsets else set(range(y, y + obj.h))
+            for ry in sorted(touched_rows):
+                if room.row_groups[ry].group != obj.group:
+                    return (
+                        False,
+                        f"Animated object '{obj.name}' (group '{obj.group}') cannot be placed in "
+                        f"row {ry} (assigned to '{room.row_groups[ry].group or '(none)'}').",
+                    )
+
         if obj.non_blockable:
             return True, ""
 
-        offsets = obj.occupied_offsets()
         occupied = self.room_blockable_cells(room, ignore_indices=ignore_indices)
         for dx, dy in offsets:
             if (x + dx, y + dy) in occupied:
@@ -936,6 +1215,8 @@ class Project:
         obj_id: int,
         *,
         new_region: StampRegion | None = None,
+        new_frames: Sequence[StampRegion] | None = None,
+        new_animation_speed: int | None = None,
         new_group: str | None = None,
         new_pixel_mapping: Sequence[int] | None = None,
     ) -> list[tuple[int, str, int, int, int]]:
@@ -948,7 +1229,15 @@ class Project:
         if target is None:
             return []
 
-        probe_region = target.region if new_region is None else new_region
+        if new_frames is not None:
+            probe_frames = list(new_frames)
+        elif new_region is not None:
+            probe_frames = [new_region] + list(target.frames[1:])
+        else:
+            probe_frames = list(target.frames)
+
+        probe_speed = target.animation_speed if new_animation_speed is None else int(new_animation_speed)
+        probe_region = probe_frames[0] if probe_frames else StampRegion(0, 0, 0, 0)
         probe_group_name = target.group if new_group is None else new_group
         probe_group = self.get_group(probe_group_name)
         probe_mapping = (
@@ -957,23 +1246,31 @@ class Project:
             else new_pixel_mapping
         )
 
+        probe_is_anim = len(probe_frames) >= 2 and probe_speed > 0
+        active_frames = probe_frames if probe_is_anim else probe_frames[:1]
         if (
             probe_group is not None
             and probe_group.image is not None
             and probe_mapping is not None
             and is_valid_pixel_mapping(probe_mapping)
-            and probe_region.is_within_image(probe_group.image)
+            and probe_frames
+            and all(
+                f.w == probe_region.w
+                and f.h == probe_region.h
+                and f.is_within_image(probe_group.image)
+                for f in active_frames
+            )
         ):
             probe_chars: list[list[int]] = []
             for dy in range(probe_region.h):
                 row: list[int] = []
                 for dx in range(probe_region.w):
-                    gb = probe_group.image.extract_glyph_bytes(
-                        probe_region.x + dx,
-                        probe_region.y + dy,
-                        probe_mapping,
+                    non_empty = any(
+                        probe_group.image.extract_glyph_bytes(f.x + dx, f.y + dy, probe_mapping)
+                        != EMPTY_GLYPH_BYTES
+                        for f in active_frames
                     )
-                    row.append(0 if gb == EMPTY_GLYPH_BYTES else 1)
+                    row.append(1 if non_empty else 0)
                 probe_chars.append(row)
         else:
             probe_chars = [list(r) for r in target.chars]
@@ -985,7 +1282,8 @@ class Project:
             tags=list(target.tags),
             non_blockable=False,
             colpf3=target.colpf3,
-            region=probe_region,
+            frames=probe_frames,
+            animation_speed=probe_speed,
             chars=probe_chars,
         )
         test_objects = dict(objects_by_id)
@@ -1047,11 +1345,15 @@ def render_room_row_rgb(
     room: Room,
     row_y: int,
     pal_table: PalPaletteTable,
+    *,
+    frame_indices: Mapping[int, int] | None = None,
 ) -> list[list[tuple[int, int, int]]]:
     """Render one character row (8 scanlines x 160 pixels) of a room as (R, G, B) pixels.
 
     Uses the glyph table of `room.row_groups[row_y].group` and the colors of
     `room.row_groups[row_y].palette` (not the placed object's own group).
+    When `frame_indices` maps an animated object ID to a frame index, dedicated
+    slots render that frame's bitmap instead of frame 0.
     """
     if not (0 <= row_y < ROOM_HEIGHT):
         raise ValueError(f"Row index out of range 0..{ROOM_HEIGHT - 1}: {row_y}.")
@@ -1073,10 +1375,31 @@ def render_room_row_rgb(
     if row_grp is None or row_grp.image is None:
         return scanlines
 
+    ded_slot_bytes: dict[int, bytes] = {}
+    if frame_indices:
+        from room_editor.model.glyphs import render_glyph_bytes_rgb
+
+        for entry in row_grp.glyph_table.entries:
+            if not entry.is_dedicated or entry.object_id not in frame_indices:
+                continue
+            wrapped_idx = int(frame_indices[entry.object_id]) % len(entry.frames)
+            ded_slot_bytes[entry.code] = entry.frames[wrapped_idx]
+
     for cx, code in enumerate(row_codes):
         if code == 0:
             continue
-        glyph_rgb = row_grp.glyph_table.render_glyph_rgb(code, row_pal, pal_table)
+        base_code = code & 0x7F
+        if base_code in ded_slot_bytes:
+            from room_editor.model.glyphs import render_glyph_bytes_rgb
+
+            glyph_rgb = render_glyph_bytes_rgb(
+                ded_slot_bytes[base_code],
+                row_pal,
+                pal_table,
+                colpf3=bool(code & 0x80),
+            )
+        else:
+            glyph_rgb = row_grp.glyph_table.render_glyph_rgb(code, row_pal, pal_table)
         if glyph_rgb is None:
             continue
         px0 = cx * GLYPH_WIDTH

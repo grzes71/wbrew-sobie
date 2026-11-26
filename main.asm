@@ -25,6 +25,38 @@ cur_row_style           = $34A0     ; Active room per-row style cache (24 bytes:
 room_dli_style          = $34C0     ; Target style ID per DLI transition (24 bytes: $34C0..$34D7)
 room_dli_count          = $34D8     ; Active DLI count for current room (0..23)
 cur_room_id             = $34D9     ; Currently active room ID (1..ROOM_MAX_ID)
+
+; --- Room Animation Runtime State ($34E0+, below PMG_BASE=$3800) ---
+    .if MAX_ROOM_ANIMS > 0
+ANIM_STATE_CAP          = MAX_ROOM_ANIMS
+    .else
+ANIM_STATE_CAP          = 1
+    .endif
+    .if MAX_ROOM_FORM1_SLOTS > 0
+ANIM_SLOT_CAP           = MAX_ROOM_FORM1_SLOTS
+    .else
+ANIM_SLOT_CAP           = 1
+    .endif
+
+anim_room_count         = $34E0                             ; 1 B: active animated objs
+anim_st_id              = anim_room_count + 1               ; ANIM_STATE_CAP B
+anim_st_cnt             = anim_st_id + ANIM_STATE_CAP       ; ANIM_STATE_CAP B
+anim_st_frame           = anim_st_cnt + ANIM_STATE_CAP      ; ANIM_STATE_CAP B
+anim_st_vis             = anim_st_frame + ANIM_STATE_CAP    ; ANIM_STATE_CAP B (Form 2 applied frame)
+anim_st_pend            = anim_st_vis + ANIM_STATE_CAP      ; ANIM_STATE_CAP B
+anim_st_pos             = anim_st_pend + ANIM_STATE_CAP     ; ANIM_STATE_CAP B (slot / delta pair cursor)
+anim_st_sbase           = anim_st_pos + ANIM_STATE_CAP      ; ANIM_STATE_CAP B (Form 1 offset in slot_cur)
+anim_slot_cur           = anim_st_sbase + ANIM_STATE_CAP    ; ANIM_SLOT_CAP B (Form 1 last pat_idx)
+    .ifdef ANIM_COUNT_COPIES
+anim_copy_count         = anim_slot_cur + ANIM_SLOT_CAP     ; 1 B: per-tick copy telemetry
+ANIM_RAM_END            = anim_copy_count + 1
+    .else
+ANIM_RAM_END            = anim_slot_cur + ANIM_SLOT_CAP
+    .endif
+    .if ANIM_RAM_END > $3800
+        .error "Animation state RAM overflows into PMG_BASE ($3800)!"
+    .endif
+
 PMG_BASE                = $3800     ; 2 KB PMG single-line buffer ($3800..$3FFF)
 PMG_MISSILES            = PMG_BASE + $300 ; Missiles buffer ($3B00..$3BFF)
 PMG_P0                  = PMG_BASE + $400 ; Player 0 buffer ($3C00..$3CFF)
@@ -65,6 +97,9 @@ PMG_P3                  = PMG_BASE + $700 ; Player 3 buffer ($3F00..$3FFF)
 ; ------------------------------------------------------------------------------
 .proc state_machine_init
     jsr input_init
+    lda #0
+    sta zp_anim_active
+    sta zp_anim_pending
     lda #STATE_NONE
     sta zp_current_state
     lda #STATE_TITLE_SCREEN
@@ -150,6 +185,7 @@ state_update_hi
     icl 'engine/input.asm'
     icl 'engine/dli.asm'
     icl 'engine/room.asm'
+    icl 'engine/anim.asm'
     icl 'scenes/title.asm'
     icl 'scenes/intro.asm'
     icl 'scenes/game.asm'
@@ -171,6 +207,7 @@ ROOMS_ALIGN_CHARSETS = 1
     icl 'gen/objects.asm'
     icl 'gen/rooms.asm'
     icl 'gen/teleports.asm'
+    icl 'gen/animations.asm'
     icl 'gen/intro_text.asm'
 
 ; --- DOS Binary Run Address ---

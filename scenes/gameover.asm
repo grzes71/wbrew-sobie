@@ -8,6 +8,8 @@
     lda #0
     sta SDMCTL
     sta DMACTL
+    sta zp_anim_active
+    sta zp_anim_pending
 
     jsr apply_global_palette
     jsr clear_screen_vram

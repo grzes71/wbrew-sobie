@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from room_editor.model.glyphs import MAX_GLYPHS_PER_GROUP, is_valid_pixel_mapping
+from room_editor.model.glyphs import (
+    MAX_ANIMATION_SPEED,
+    MAX_GLYPHS_PER_GROUP,
+    MAX_OBJECT_FRAMES,
+    is_valid_pixel_mapping,
+)
 from room_editor.model.graph import (
     compute_edge_passages,
     compute_reachable_rooms,
@@ -247,6 +252,32 @@ def validate_project(project: Project) -> list[ValidationIssue]:
         else:
             seen_obj_names.add(obj.name)
 
+        if len(obj.frames) < 1 or len(obj.frames) > MAX_OBJECT_FRAMES:
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="OBJECT_INVALID_FRAME_COUNT",
+                    message=(
+                        f"Object '{obj.name}' (ID {obj.id}) has {len(obj.frames)} frame(s); "
+                        f"must be 1..{MAX_OBJECT_FRAMES}."
+                    ),
+                    target_type="object",
+                    target_id=obj.id,
+                )
+            )
+        if not (0 <= obj.animation_speed <= MAX_ANIMATION_SPEED):
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="OBJECT_INVALID_ANIMATION_SPEED",
+                    message=(
+                        f"Object '{obj.name}' (ID {obj.id}) has invalid animation_speed "
+                        f"{obj.animation_speed} (must be 0..{MAX_ANIMATION_SPEED})."
+                    ),
+                    target_type="object",
+                    target_id=obj.id,
+                )
+            )
         if obj.w < 1 or obj.h < 1 or obj.w * obj.h > MAX_OBJECT_CELLS:
             issues.append(
                 ValidationIssue(
@@ -255,6 +286,46 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                     message=(
                         f"Object '{obj.name}' (ID {obj.id}) has size {obj.w}x{obj.h} "
                         f"({obj.w * obj.h} cells); must be 1..{MAX_OBJECT_CELLS}."
+                    ),
+                    target_type="object",
+                    target_id=obj.id,
+                )
+            )
+        if len(obj.frames) > 1 and any((f.w, f.h) != (obj.w, obj.h) for f in obj.frames[1:]):
+            issues.append(
+                ValidationIssue(
+                    severity="error",
+                    code="OBJECT_FRAME_SIZE_MISMATCH",
+                    message=(
+                        f"Object '{obj.name}' (ID {obj.id}) has frames whose dimensions "
+                        f"differ from frame 0 ({obj.w}x{obj.h})."
+                    ),
+                    target_type="object",
+                    target_id=obj.id,
+                )
+            )
+
+        if obj.animation_speed > 0 and len(obj.frames) == 1:
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    code="ANIM_SPEED_SINGLE_FRAME",
+                    message=(
+                        f"Object '{obj.name}' (ID {obj.id}) has animation_speed={obj.animation_speed} "
+                        "with only 1 frame (no animation effect)."
+                    ),
+                    target_type="object",
+                    target_id=obj.id,
+                )
+            )
+        elif obj.animation_speed == 0 and len(obj.frames) > 1:
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    code="ANIM_FRAMES_SPEED_ZERO",
+                    message=(
+                        f"Object '{obj.name}' (ID {obj.id}) has {len(obj.frames)} frames with "
+                        "animation_speed=0 (extra frames are unused)."
                     ),
                     target_type="object",
                     target_id=obj.id,
@@ -275,13 +346,21 @@ def validate_project(project: Project) -> list[ValidationIssue]:
         elif grp.image is not None and grp.glyph_analysis is not None:
             analysis = grp.glyph_analysis
             if obj.id in analysis.invalid_region_object_ids and 1 <= obj.cell_count <= MAX_OBJECT_CELLS:
+                bad_frames = [
+                    idx
+                    for idx, f in enumerate(obj.frames)
+                    if not f.is_within_image(grp.image)
+                ]
+                f_idx = bad_frames[0] if bad_frames else 0
+                bad_reg = obj.frames[f_idx] if f_idx < len(obj.frames) else obj.region
                 issues.append(
                     ValidationIssue(
                         severity="error",
                         code="OBJECT_REGION_OUT_OF_IMAGE",
                         message=(
-                            f"Object '{obj.name}' (ID {obj.id}) region ({obj.region.x}, {obj.region.y}) "
-                            f"{obj.w}x{obj.h} lies outside group '{grp.name}' image "
+                            f"Object '{obj.name}' (ID {obj.id}) frame {f_idx} region "
+                            f"({bad_reg.x}, {bad_reg.y}) {bad_reg.w}x{bad_reg.h} "
+                            f"lies outside group '{grp.name}' image "
                             f"({grp.image.glyph_cols}x{grp.image.glyph_rows} glyphs)."
                         ),
                         target_type="object",
@@ -319,6 +398,19 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                         message=(
                             f"Object '{obj.name}' (ID {obj.id}) has COLPF3 enabled, "
                             "but none of its glyphs use pixel value 11 (COLPF2/COLPF3)."
+                        ),
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
+            if obj.id in analysis.no_varying_cells_object_ids:
+                issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        code="ANIM_NO_VARYING_CELLS",
+                        message=(
+                            f"Object '{obj.name}' (ID {obj.id}): animated object without any varying cell "
+                            "(all frames identical)."
                         ),
                         target_type="object",
                         target_id=obj.id,
@@ -486,7 +578,8 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                     )
                 )
 
-            for dx, dy in obj.occupied_offsets():
+            offsets = obj.occupied_offsets()
+            for dx, dy in offsets:
                 cx = inst.x + dx
                 cy = inst.y + dy
                 if 0 <= cx < ROOM_WIDTH and 0 <= cy < ROOM_HEIGHT:
@@ -517,20 +610,64 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                         and (obj.id, inst.x, cy) not in mismatch_reported
                     ):
                         mismatch_reported.add((obj.id, inst.x, cy))
-                        issues.append(
-                            ValidationIssue(
-                                severity="warning",
-                                code="OBJECT_ROW_GROUP_MISMATCH",
-                                message=(
-                                    f"Object '{obj.name}' (group '{obj.group}') in room '{room.name}' "
-                                    f"at row {cy} uses row group '{row_ra.group}'."
-                                ),
-                                target_type="room",
-                                target_id=room.id,
-                                x=inst.x,
-                                y=cy,
+                        if obj.is_animated:
+                            issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    code="ANIMATED_OBJECT_ROW_GROUP_MISMATCH",
+                                    message=(
+                                        f"Animated object '{obj.name}' (group '{obj.group}') in room '{room.name}' "
+                                        f"at row {cy} uses incompatible row group '{row_ra.group}'."
+                                    ),
+                                    target_type="room",
+                                    target_id=room.id,
+                                    x=inst.x,
+                                    y=cy,
+                                )
                             )
-                        )
+                        else:
+                            issues.append(
+                                ValidationIssue(
+                                    severity="warning",
+                                    code="OBJECT_ROW_GROUP_MISMATCH",
+                                    message=(
+                                        f"Object '{obj.name}' (group '{obj.group}') in room '{room.name}' "
+                                        f"at row {cy} uses row group '{row_ra.group}'."
+                                    ),
+                                    target_type="room",
+                                    target_id=room.id,
+                                    x=inst.x,
+                                    y=cy,
+                                )
+                            )
+
+            # Also check animated object rows if offsets was empty (e.g., invalid/overflowing object)
+            if obj.is_animated and not offsets:
+                for dy in range(obj.h):
+                    cy = inst.y + dy
+                    if 0 <= cy < ROOM_HEIGHT:
+                        row_ra = room.row_groups[cy]
+                        if (
+                            row_ra.group in groups_by_name
+                            and obj.group in groups_by_name
+                            and row_ra.group != obj.group
+                            and (obj.id, inst.x, cy) not in mismatch_reported
+                        ):
+                            mismatch_reported.add((obj.id, inst.x, cy))
+                            issues.append(
+                                ValidationIssue(
+                                    severity="error",
+                                    code="ANIMATED_OBJECT_ROW_GROUP_MISMATCH",
+                                    message=(
+                                        f"Animated object '{obj.name}' (group '{obj.group}') in room '{room.name}' "
+                                        f"at row {cy} uses incompatible row group '{row_ra.group}'."
+                                    ),
+                                    target_type="room",
+                                    target_id=room.id,
+                                    x=inst.x,
+                                    y=cy,
+                                )
+                            )
 
         # Informational warning: non-blockable instance completely hidden by other instances
         _, sources = project.compose_room_with_sources(room)
