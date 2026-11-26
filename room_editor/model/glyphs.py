@@ -13,6 +13,8 @@ GLYPH_HEIGHT = 8
 MAX_GLYPHS_PER_GROUP = 127
 MAX_OBJECT_FRAMES = 16
 MAX_ANIMATION_SPEED = 255
+MAX_FRAME_DURATION = 255
+MAX_GROUP_REPEAT = 255
 EMPTY_GLYPH_BYTES = b"\x00" * GLYPH_HEIGHT
 DEFAULT_PIXEL_MAPPING: tuple[int, int, int, int] = (0, 1, 2, 3)
 
@@ -163,18 +165,20 @@ class IndexedImage:
 
 @dataclass(frozen=True)
 class StampRegion:
-    """Rectangular stamp region in glyph units (1 unit = 4x8 pixels)."""
+    """Rectangular stamp region in glyph units (1 unit = 4x8 pixels) with optional PAL tick duration."""
 
     x: int
     y: int
     w: int
     h: int
+    duration: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "x", int(self.x))
         object.__setattr__(self, "y", int(self.y))
         object.__setattr__(self, "w", int(self.w))
         object.__setattr__(self, "h", int(self.h))
+        object.__setattr__(self, "duration", int(self.duration))
 
     @property
     def cell_count(self) -> int:
@@ -193,8 +197,11 @@ class StampRegion:
         )
 
     def to_dict(self) -> dict[str, int]:
-        """Serialize region to a plain dict with stable key order."""
-        return {"x": self.x, "y": self.y, "w": self.w, "h": self.h}
+        """Serialize region to a plain dict with stable key order (omitting duration when 0)."""
+        data = {"x": self.x, "y": self.y, "w": self.w, "h": self.h}
+        if self.duration != 0:
+            data["duration"] = int(self.duration)
+        return data
 
     @classmethod
     def from_dict(cls, data: Any) -> StampRegion:
@@ -206,6 +213,41 @@ class StampRegion:
             y=int(data.get("y", 0)),
             w=int(data.get("w", 1)),
             h=int(data.get("h", 1)),
+            duration=int(data.get("duration", 0)),
+        )
+
+
+@dataclass(frozen=True)
+class FrameGroup:
+    """Flat contiguous run of >= 2 animation frames with a loop repeat count (1..255)."""
+
+    first: int
+    last: int
+    repeat: int = 1
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "first", int(self.first))
+        object.__setattr__(self, "last", int(self.last))
+        object.__setattr__(self, "repeat", int(self.repeat))
+
+    @property
+    def frame_count(self) -> int:
+        return self.last - self.first + 1
+
+    def contains(self, frame_index: int) -> bool:
+        return self.first <= frame_index <= self.last
+
+    def to_dict(self) -> dict[str, int]:
+        return {"first": self.first, "last": self.last, "repeat": self.repeat}
+
+    @classmethod
+    def from_dict(cls, data: Any) -> FrameGroup:
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected frame group mapping, got {data!r}.")
+        return cls(
+            first=int(data.get("first", 0)),
+            last=int(data.get("last", 0)),
+            repeat=int(data.get("repeat", 1)),
         )
 
 

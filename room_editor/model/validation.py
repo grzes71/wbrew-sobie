@@ -7,7 +7,9 @@ from typing import Literal
 
 from room_editor.model.glyphs import (
     MAX_ANIMATION_SPEED,
+    MAX_FRAME_DURATION,
     MAX_GLYPHS_PER_GROUP,
+    MAX_GROUP_REPEAT,
     MAX_OBJECT_FRAMES,
     is_valid_pixel_mapping,
 )
@@ -278,6 +280,20 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                     target_id=obj.id,
                 )
             )
+        for f_idx, freg in enumerate(obj.frames):
+            if not (0 <= freg.duration <= MAX_FRAME_DURATION):
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="OBJECT_INVALID_FRAME_DURATION",
+                        message=(
+                            f"Object '{obj.name}' (ID {obj.id}) frame {f_idx} has invalid duration "
+                            f"{freg.duration} (must be 0..{MAX_FRAME_DURATION})."
+                        ),
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
         if obj.w < 1 or obj.h < 1 or obj.w * obj.h > MAX_OBJECT_CELLS:
             issues.append(
                 ValidationIssue(
@@ -326,6 +342,107 @@ def validate_project(project: Project) -> list[ValidationIssue]:
                     message=(
                         f"Object '{obj.name}' (ID {obj.id}) has {len(obj.frames)} frames with "
                         "animation_speed=0 (extra frames are unused)."
+                    ),
+                    target_type="object",
+                    target_id=obj.id,
+                )
+            )
+        if obj.animation_speed == 0 and any(f.duration > 0 for f in obj.frames):
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    code="ANIM_FRAME_DURATION_SPEED_ZERO",
+                    message=(
+                        f"Object '{obj.name}' (ID {obj.id}) has frame duration override(s) > 0 "
+                        "with animation_speed=0 (ignored)."
+                    ),
+                    target_type="object",
+                    target_id=obj.id,
+                )
+            )
+
+        sorted_groups = sorted(obj.groups, key=lambda gr: (gr.first, gr.last))
+        for grp_item in sorted_groups:
+            if not (1 <= grp_item.repeat <= MAX_GROUP_REPEAT):
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="OBJECT_INVALID_GROUP_REPEAT",
+                        message=(
+                            f"Object '{obj.name}' (ID {obj.id}) frame group ({grp_item.first}..{grp_item.last}) "
+                            f"has invalid repeat {grp_item.repeat} (must be 1..{MAX_GROUP_REPEAT})."
+                        ),
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
+            if grp_item.last - grp_item.first + 1 < 2:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="OBJECT_GROUP_TOO_SHORT",
+                        message=(
+                            f"Object '{obj.name}' (ID {obj.id}) frame group ({grp_item.first}..{grp_item.last}) "
+                            "must cover at least 2 consecutive frames."
+                        ),
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
+            if (
+                grp_item.first < 0
+                or grp_item.last < 0
+                or grp_item.first >= len(obj.frames)
+                or grp_item.last >= len(obj.frames)
+            ):
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="OBJECT_GROUP_OUT_OF_BOUNDS",
+                        message=(
+                            f"Object '{obj.name}' (ID {obj.id}) frame group ({grp_item.first}..{grp_item.last}) "
+                            f"is outside frame range 0..{len(obj.frames) - 1}."
+                        ),
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
+            if grp_item.repeat == 1:
+                issues.append(
+                    ValidationIssue(
+                        severity="warning",
+                        code="ANIM_GROUP_REPEAT_ONE",
+                        message=(
+                            f"Object '{obj.name}' (ID {obj.id}) frame group ({grp_item.first}..{grp_item.last}) "
+                            "has repeat=1 (no repetition)."
+                        ),
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
+        for prev_g, cur_g in zip(sorted_groups, sorted_groups[1:]):
+            if prev_g.last >= cur_g.first:
+                issues.append(
+                    ValidationIssue(
+                        severity="error",
+                        code="OBJECT_OVERLAPPING_GROUPS",
+                        message=(
+                            f"Object '{obj.name}' (ID {obj.id}) has overlapping/nested frame groups "
+                            f"({prev_g.first}..{prev_g.last}) and ({cur_g.first}..{cur_g.last})."
+                        ),
+                        target_type="object",
+                        target_id=obj.id,
+                    )
+                )
+                break
+        if obj.groups and not obj.is_animated:
+            issues.append(
+                ValidationIssue(
+                    severity="warning",
+                    code="ANIM_GROUPS_NOT_ANIMATED",
+                    message=(
+                        f"Object '{obj.name}' (ID {obj.id}) defines frame group(s) while not animated "
+                        "(requires >= 2 frames and animation_speed > 0; ignored)."
                     ),
                     target_type="object",
                     target_id=obj.id,

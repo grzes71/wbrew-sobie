@@ -147,7 +147,13 @@ def _build_anim_test_env(
                 "anim_st_pend    = anim_st_vis + ANIM_STATE_CAP",
                 "anim_st_pos     = anim_st_pend + ANIM_STATE_CAP",
                 "anim_st_sbase   = anim_st_pos + ANIM_STATE_CAP",
-                "anim_slot_cur   = anim_st_sbase + ANIM_STATE_CAP",
+                "anim_st_rep     = anim_st_sbase + ANIM_STATE_CAP",
+                "    .if ANIM_F2_GRP_COUNT > 0",
+                "anim_st_vrep    = anim_st_rep + ANIM_STATE_CAP",
+                "anim_slot_cur   = anim_st_vrep + ANIM_STATE_CAP",
+                "    .else",
+                "anim_slot_cur   = anim_st_rep + ANIM_STATE_CAP",
+                "    .endif",
                 "    .ifdef ANIM_COUNT_COPIES",
                 "anim_copy_count = anim_slot_cur + ANIM_SLOT_CAP",
                 "    .endif",
@@ -542,3 +548,604 @@ def test_py65_budget_deferral_both_forms_and_split_pool(tmp_path: Path) -> None:
     _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # tick 34
     _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # tick 35 (frame 3)
     assert [bytes(mem[ch_base + c * 8 : ch_base + (c + 1) * 8]) for c in f4_codes] == f4_frames[3]
+
+
+def test_py65_per_frame_durations_uniform_mixed_extreme_budget_and_reentry(tmp_path: Path) -> None:
+    """Verify per-frame durations (1..255), uniform+variable room, budget deferral stability, and re-entry."""
+    tiles: dict[tuple[int, int], bytes] = {}
+    for x in range(4):
+        tiles[(x, 0)] = _pat(10 + x)  # Obj 1 variable: 4 frames
+    for x in range(2):
+        tiles[(4 + x, 0)] = _pat(30 + x)  # Obj 2 uniform: 2 frames @ speed 3
+    # Obj 3: 15 varying slots x 2 frames (durations [2, 3], > budget 12 to force deferral!)
+    f3_0 = [_pat(100 + i) for i in range(15)]
+    f3_1 = [_pat(200 + i) for i in range(15)]
+    for i in range(15):
+        tiles[(i, 1)] = f3_0[i]
+        tiles[(i, 2)] = f3_1[i]
+
+    doc = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "g",
+                "image": "g.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+            }
+        ],
+        "objects": [
+            # Obj 1 (aid=0): durations = [1, 255, 2, 3], speed=3 -> test boundary 1 and 255 + wrap
+            {
+                "id": 1,
+                "name": "var_extremes",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 3,
+                "frames": [
+                    {"x": 0, "y": 0, "w": 1, "h": 1, "duration": 1},
+                    {"x": 1, "y": 0, "w": 1, "h": 1, "duration": 255},
+                    {"x": 2, "y": 0, "w": 1, "h": 1, "duration": 2},
+                    {"x": 3, "y": 0, "w": 1, "h": 1},  # fallback to 3
+                ],
+            },
+            # Obj 2 (aid=1): uniform speed=3 alongside Obj 1
+            {
+                "id": 2,
+                "name": "uni_peer",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 3,
+                "frames": [{"x": 4, "y": 0, "w": 1, "h": 1}, {"x": 5, "y": 0, "w": 1, "h": 1}],
+            },
+            # Obj 3 (aid=2): 15-slot variable durations [2, 3], speed=5 -> defers across 2 VBIs without timer drift
+            {
+                "id": 3,
+                "name": "big_var",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 5,
+                "frames": [
+                    {"x": 0, "y": 1, "w": 15, "h": 1, "duration": 2},
+                    {"x": 0, "y": 2, "w": 15, "h": 1, "duration": 3},
+                ],
+            },
+        ],
+        "rooms": [
+            {
+                "id": 1,
+                "name": "R_Extremes",
+                "pos": [0, 0],
+                "row_groups": ["g"],
+                "placed": [{"object": 1, "x": 0, "y": 0}, {"object": 2, "x": 2, "y": 0}],
+            },
+            {
+                "id": 2,
+                "name": "R_MixedVar",
+                "pos": [1, 0],
+                "row_groups": ["g"],
+                "placed": [
+                    {"object": 1, "x": 0, "y": 0},
+                    {"object": 3, "x": 0, "y": 2},
+                ],
+            },
+        ],
+        "teleports": [],
+        "start": {"room": 1, "x": 0, "y": 0},
+    }
+
+    mpu, mem, labels, report = _build_anim_test_env(
+        tmp_path, doc, lambda tx, ty: tiles.get((tx, ty), bytes(8)), tiles_x=16, tiles_y=4
+    )
+    assert report.anim_uniform_count == 1
+    assert report.anim_var_dur_count == 2
+    ch_base = labels["CHARSET_G"]
+
+    # Room 1: Obj 1 (var [1, 255, 2, 3]) + Obj 2 (uni 3)
+    mpu.x = 1
+    _run_subroutine_cycles(mpu, labels["ROOM_DRAW"])
+    mpu.x = 1
+    _run_subroutine_cycles(mpu, labels["ROOM_ANIM_INIT"])
+    vram = labels["SCREEN_VRAM"]
+    c_var = mem[vram + 0]
+    c_uni = mem[vram + 2]
+    assert mem[labels["ANIM_ST_CNT"] + 0] == 1
+    assert mem[labels["ANIM_ST_CNT"] + 1] == 3
+
+    def _slot(c: int) -> bytes:
+        return bytes(mem[ch_base + c * 8 : ch_base + (c + 1) * 8])
+
+    assert _slot(c_var) == _pat(10)
+    # Tick 1: var switches frame 0 -> 1 (loads cnt=255), uni stays at cnt=2
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    assert _slot(c_var) == _pat(11) and mem[labels["ANIM_ST_CNT"] + 0] == 255
+    assert _slot(c_uni) == _pat(30) and mem[labels["ANIM_ST_CNT"] + 1] == 2
+
+    # Advance 254 ticks (total 255): var still on frame 1 (cnt reaches 1) while uni stepped every 3 ticks
+    for _ in range(254):
+        _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    assert _slot(c_var) == _pat(11) and mem[labels["ANIM_ST_CNT"] + 0] == 1
+    assert mem[labels["ANIM_ST_FRAME"] + 1] == (255 // 3) % 2
+
+    # Tick 256: var switches frame 1 -> 2 (loads cnt=2); Tick 258 -> frame 3 (loads cnt=3); Tick 261 -> wraps to frame 0 (cnt=1)
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    assert _slot(c_var) == _pat(12) and mem[labels["ANIM_ST_CNT"] + 0] == 2
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    assert _slot(c_var) == _pat(12)
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    assert _slot(c_var) == _pat(13) and mem[labels["ANIM_ST_CNT"] + 0] == 3
+    for _ in range(2):
+        _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    assert _slot(c_var) == _pat(13)
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    assert _slot(c_var) == _pat(10) and mem[labels["ANIM_ST_CNT"] + 0] == 1
+
+    # Room 2: two variable-timing objects + 15-slot budget deferral does NOT shift timing
+    mpu.x = 2
+    _run_subroutine_cycles(mpu, labels["ROOM_DRAW"])
+    mpu.x = 2
+    _run_subroutine_cycles(mpu, labels["ROOM_ANIM_INIT"])
+    big_codes = [mem[vram + 2 * 40 + col] for col in range(15)]
+    assert mem[labels["ANIM_ST_CNT"] + 0] == 1  # var_extremes starts at frame 0 (dur=1)
+    assert mem[labels["ANIM_ST_CNT"] + 1] == 2  # big_var starts at frame 0 (dur=2)
+
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # tick 1: var_extremes advances to f1, big_var cnt=1
+    assert mem[labels["ANIM_ST_FRAME"] + 0] == 1
+    assert mem[labels["ANIM_ST_CNT"] + 1] == 1
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # tick 2: big_var advances to f1 (loads cnt=3), 12/15 copied (3 deferred)
+    assert mem[labels["ANIM_COPY_COUNT"]] == 12
+    assert mem[labels["ANIM_ST_FRAME"] + 1] == 1
+    assert mem[labels["ANIM_ST_CNT"] + 1] == 3
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # tick 3: finishes remaining 3 copies, timer cnt=2 (no drift!)
+    assert mem[labels["ANIM_COPY_COUNT"]] == 3
+    assert mem[labels["ANIM_ST_CNT"] + 1] == 2
+    assert [_slot(c) for c in big_codes] == f3_1
+
+    # Re-entering Room 2 resets both objects cleanly to frame 0 with frame 0 durations (1 and 2)
+    mpu.x = 2
+    _run_subroutine_cycles(mpu, labels["ROOM_ANIM_INIT"])
+    assert mem[labels["ANIM_ST_FRAME"] + 0] == 0 and mem[labels["ANIM_ST_CNT"] + 0] == 1
+    assert mem[labels["ANIM_ST_FRAME"] + 1] == 0 and mem[labels["ANIM_ST_CNT"] + 1] == 2
+    assert [_slot(c) for c in big_codes] == f3_0
+
+
+def test_py65_wide_duration_table_lookup(tmp_path: Path) -> None:
+    """Verify 6502 execution when unique duration tables exceed 256 bytes (ANIM_DUR_WIDE == 1)."""
+    tiles: dict[tuple[int, int], bytes] = {}
+    for x in range(16):
+        tiles[(x, 0)] = _pat(1 + x)
+    objs = []
+    placed = []
+    # 18 non-uniform objects x 16 frames = 288 unique duration bytes -> ANIM_DUR_WIDE = 1
+    for i in range(18):
+        durs = [((i * 13 + f) % 240) + 1 for f in range(16)]
+        durs[0] = 2 + i
+        durs[1] = 4 + i
+        objs.append(
+            {
+                "id": i + 1,
+                "name": f"w{i}",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 5,
+                "frames": [{"x": (f + i) % 16, "y": 0, "w": 1, "h": 1, "duration": durs[f]} for f in range(16)],
+            }
+        )
+        placed.append({"object": i + 1, "x": i, "y": 0})
+    doc = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "g",
+                "image": "g.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+            }
+        ],
+        "objects": objs,
+        "rooms": [{"id": 1, "name": "R", "pos": [0, 0], "row_groups": ["g"], "placed": placed}],
+        "teleports": [],
+        "start": {"room": 1, "x": 0, "y": 0},
+    }
+    mpu, mem, labels, report = _build_anim_test_env(
+        tmp_path, doc, lambda tx, ty: tiles.get((tx, ty), bytes(8)), tiles_x=16, tiles_y=1
+    )
+    assert "ANIM_DUR_LO" in labels
+    assert report.anim_dur_table_count == 18
+    mpu.x = 1
+    _run_subroutine_cycles(mpu, labels["ROOM_DRAW"])
+    mpu.x = 1
+    _run_subroutine_cycles(mpu, labels["ROOM_ANIM_INIT"])
+    # Object 0 has frame 0 duration=2, frame 1 duration=4; object 1 has frame 0 duration=3, frame 1 duration=5
+    assert mem[labels["ANIM_ST_CNT"] + 0] == 2
+    assert mem[labels["ANIM_ST_CNT"] + 1] == 3
+    for _ in range(2):
+        _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    assert mem[labels["ANIM_ST_FRAME"] + 0] == 1 and mem[labels["ANIM_ST_CNT"] + 0] == 4
+    assert mem[labels["ANIM_ST_FRAME"] + 1] == 0 and mem[labels["ANIM_ST_CNT"] + 1] == 1
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    assert mem[labels["ANIM_ST_FRAME"] + 1] == 1 and mem[labels["ANIM_ST_CNT"] + 1] == 5
+
+
+def test_py65_frame_groups_example_positions_repeats_durations_and_both_forms(
+    tmp_path: Path,
+) -> None:
+    """Verify exact 6502 tick-by-tick slot updates for frame groups across Form 1 & Form 2."""
+    tiles: dict[tuple[int, int], bytes] = {}
+    # f1_ex (1x1, 5 frames): unique patterns _pat(1..5) at y=0, x=0..4
+    f1_pats = [_pat(1 + i) for i in range(5)]
+    for i, p in enumerate(f1_pats):
+        tiles[(i, 0)] = p
+
+    # f2_ex (10x1, 11 frames at y=9..19): 10 cumulative single-slot changes -> Form 2 (S=10, F=11: 88B < 110B)
+    f2_base = [_pat(20 + dx) for dx in range(10)]
+    f2_frames: list[list[bytes]] = []
+    cur10 = list(f2_base)
+    for f in range(11):
+        if f >= 1:
+            cur10 = list(cur10)
+            cur10[f - 1] = _pat(100 + f - 1)
+        f2_frames.append(list(cur10))
+        for dx in range(10):
+            tiles[(dx, 9 + f)] = cur10[dx]
+
+    # Obj 3: group at start {0..2} x2, 5 frames (y=1, x=0..4)
+    start_pats = [_pat(40 + i) for i in range(5)]
+    for i, p in enumerate(start_pats):
+        tiles[(i, 1)] = p
+
+    # Obj 4: group at end {2..4} x2, 5 frames (y=1, x=5..9)
+    end_pats = [_pat(50 + i) for i in range(5)]
+    for i, p in enumerate(end_pats):
+        tiles[(5 + i, 1)] = p
+
+    # Obj 5: covering all frames {0..2} x3, 3 frames (y=0, x=5..7)
+    all_pats = [_pat(60 + i) for i in range(3)]
+    for i, p in enumerate(all_pats):
+        tiles[(5 + i, 0)] = p
+
+    # Obj 6: two groups + per-frame durations, 6 frames (y=7, x=0..5), groups {0..1}x2, {3..4}x3, dur [1,2,1,2,1,2]
+    two_pats = [_pat(70 + i) for i in range(6)]
+    for i, p in enumerate(two_pats):
+        tiles[(i, 7)] = p
+
+    # Obj 7: repeat 255 (4 frames, {1..2}x255, y=8, x=0..3) and Obj 8: repeat 1 (y=8, x=4..7)
+    r255_pats = [_pat(80 + i) for i in range(4)]
+    for i, p in enumerate(r255_pats):
+        tiles[(i, 8)] = p
+    r1_pats = [_pat(90 + i) for i in range(4)]
+    for i, p in enumerate(r1_pats):
+        tiles[(4 + i, 8)] = p
+
+    doc = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "g",
+                "image": "g.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+            }
+        ],
+        "objects": [
+            {
+                "id": 1, "name": "f1_ex", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 1,
+                "frames": [{"x": i, "y": 0, "w": 1, "h": 1} for i in range(5)],
+                "groups": [{"first": 1, "last": 3, "repeat": 3}],
+            },
+            {
+                "id": 2, "name": "f2_ex", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 1,
+                "frames": [{"x": 0, "y": 9 + f, "w": 10, "h": 1} for f in range(11)],
+                "groups": [{"first": 1, "last": 3, "repeat": 3}],
+            },
+            {
+                "id": 3, "name": "gstart", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 1,
+                "frames": [{"x": i, "y": 1, "w": 1, "h": 1} for i in range(5)],
+                "groups": [{"first": 0, "last": 2, "repeat": 2}],
+            },
+            {
+                "id": 4, "name": "gend", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 1,
+                "frames": [{"x": 5 + i, "y": 1, "w": 1, "h": 1} for i in range(5)],
+                "groups": [{"first": 2, "last": 4, "repeat": 2}],
+            },
+            {
+                "id": 5, "name": "gall", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 1,
+                "frames": [{"x": 5 + i, "y": 0, "w": 1, "h": 1} for i in range(3)],
+                "groups": [{"first": 0, "last": 2, "repeat": 3}],
+            },
+            {
+                "id": 6, "name": "gtwo_dur", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 1,
+                "frames": [
+                    {"x": i, "y": 7, "w": 1, "h": 1, "duration": (2 if i % 2 == 1 else 1)}
+                    for i in range(6)
+                ],
+                "groups": [{"first": 0, "last": 1, "repeat": 2}, {"first": 3, "last": 4, "repeat": 3}],
+            },
+            {
+                "id": 7, "name": "gr255", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 1,
+                "frames": [{"x": i, "y": 8, "w": 1, "h": 1} for i in range(4)],
+                "groups": [{"first": 1, "last": 2, "repeat": 255}],
+            },
+            {
+                "id": 8, "name": "gr1", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 1,
+                "frames": [{"x": 4 + i, "y": 8, "w": 1, "h": 1} for i in range(4)],
+                "groups": [{"first": 1, "last": 2, "repeat": 1}],
+            },
+        ],
+        "rooms": [
+            {
+                "id": 1,
+                "name": "R_Ex",
+                "pos": [0, 0],
+                "row_groups": ["g"],
+                "placed": [{"object": 1, "x": 0, "y": 0}, {"object": 2, "x": 2, "y": 0}],
+            },
+            {
+                "id": 2,
+                "name": "R_Misc",
+                "pos": [1, 0],
+                "row_groups": ["g"],
+                "placed": [
+                    {"object": 3, "x": 0, "y": 0},
+                    {"object": 4, "x": 2, "y": 0},
+                    {"object": 5, "x": 4, "y": 0},
+                    {"object": 6, "x": 6, "y": 0},
+                    {"object": 8, "x": 8, "y": 0},
+                ],
+            },
+            {
+                "id": 3,
+                "name": "R_255",
+                "pos": [2, 0],
+                "row_groups": ["g"],
+                "placed": [{"object": 7, "x": 0, "y": 0}],
+            },
+        ],
+        "teleports": [],
+        "start": {"room": 1, "x": 0, "y": 0},
+    }
+
+    mpu, mem, labels, report = _build_anim_test_env(
+        tmp_path, doc, lambda tx, ty: tiles.get((tx, ty), bytes(8)), tiles_x=16, tiles_y=20
+    )
+    assert report.anim_stats[0].form == "form1"
+    assert report.anim_stats[1].form == "form2"
+    ch_base = labels["CHARSET_G"]
+    vram = labels["SCREEN_VRAM"]
+
+    def _slot(c: int) -> bytes:
+        return bytes(mem[ch_base + c * 8 : ch_base + (c + 1) * 8])
+
+    # Room 1: Form 1 & Form 2 tick-by-tick across 19 ticks
+    mpu.x = 1
+    _run_subroutine_cycles(mpu, labels["ROOM_DRAW"])
+    mpu.x = 1
+    _run_subroutine_cycles(mpu, labels["ROOM_ANIM_INIT"])
+    c_f1 = mem[vram + 0]
+    c_f2 = [mem[vram + 2 + dx] for dx in range(10)]
+    expected_f1 = [0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 4, 0, 1, 2, 3, 1, 2, 3, 1, 2]
+    expected_f2 = [0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0, 1, 2]
+    assert _slot(c_f1) == f1_pats[0]
+    assert [_slot(c) for c in c_f2] == f2_frames[0]
+    for exp_1, exp_2 in zip(expected_f1[1:], expected_f2[1:]):
+        _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+        assert _slot(c_f1) == f1_pats[exp_1]
+        assert [_slot(c) for c in c_f2] == f2_frames[exp_2]
+
+    # Room 2: gstart, gend, gall, gtwo_dur, gr1
+    mpu.x = 2
+    _run_subroutine_cycles(mpu, labels["ROOM_DRAW"])
+    mpu.x = 2
+    _run_subroutine_cycles(mpu, labels["ROOM_ANIM_INIT"])
+    c_s = mem[vram + 0]
+    c_e = mem[vram + 2]
+    c_a = mem[vram + 4]
+    c_two = mem[vram + 6]
+    c_r1 = mem[vram + 8]
+    # Re-entry restarts frame 0 & pass counters cleanly (gstart starts in {0..2} -> rep=2)
+    assert mem[labels["ANIM_ST_REP"] + 0] == 2
+    obs_s, obs_e, obs_a, obs_two, obs_r1 = (
+        [start_pats.index(_slot(c_s))],
+        [end_pats.index(_slot(c_e))],
+        [all_pats.index(_slot(c_a))],
+        [two_pats.index(_slot(c_two))],
+        [r1_pats.index(_slot(c_r1))],
+    )
+    for _ in range(17):
+        _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+        obs_s.append(start_pats.index(_slot(c_s)))
+        obs_e.append(end_pats.index(_slot(c_e)))
+        obs_a.append(all_pats.index(_slot(c_a)))
+        obs_two.append(two_pats.index(_slot(c_two)))
+        obs_r1.append(r1_pats.index(_slot(c_r1)))
+    assert obs_s[:10] == [0, 1, 2, 0, 1, 2, 3, 4, 0, 1]
+    assert obs_e[:10] == [0, 1, 2, 3, 4, 2, 3, 4, 0, 1]
+    assert obs_a[:9] == [0, 1, 2, 0, 1, 2, 0, 1, 2]
+    # two_grps: frames [0(1), 1(2)]x2 -> 2(1) -> [3(2), 4(1)]x3 -> 5(2) -> 0
+    # Wait per-tick frame indices: 0, 1,1, 0, 1,1, 2, 3,3, 4, 3,3, 4, 3,3, 4, 5,5
+    assert obs_two == [0, 1, 1, 0, 1, 1, 2, 3, 3, 4, 3, 3, 4, 3, 3, 4, 5, 5]
+    assert obs_r1[:6] == [0, 1, 2, 3, 0, 1]
+
+    # Re-enter Room 2 -> resets back to frame 0 and gstart pass counter=2
+    mpu.x = 2
+    _run_subroutine_cycles(mpu, labels["ROOM_ANIM_INIT"])
+    assert mem[labels["ANIM_ST_FRAME"] + 0] == 0
+    assert mem[labels["ANIM_ST_REP"] + 0] == 2
+    assert _slot(c_s) == start_pats[0] and _slot(c_two) == two_pats[0]
+
+    # Room 3: repeat = 255
+    mpu.x = 3
+    _run_subroutine_cycles(mpu, labels["ROOM_DRAW"])
+    mpu.x = 3
+    _run_subroutine_cycles(mpu, labels["ROOM_ANIM_INIT"])
+    c_255 = mem[vram + 0]
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # 0 -> 1 (rep=255)
+    assert _slot(c_255) == r255_pats[1] and mem[labels["ANIM_ST_REP"] + 0] == 255
+    for _ in range(254 * 2):
+        _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    # Still at frame 1 on final (255th) pass? 254 passes * 2 = 508 ticks -> back to 1 with rep=1!
+    assert _slot(c_255) == r255_pats[1] and mem[labels["ANIM_ST_REP"] + 0] == 1
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # -> 2 (rep=1)
+    assert _slot(c_255) == r255_pats[2]
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # -> exits group to 3!
+    assert _slot(c_255) == r255_pats[3]
+
+
+def test_py65_frame_groups_loopback_deferral_and_two_object_speeds(tmp_path: Path) -> None:
+    """Verify loop-back transition under 12-slot budget deferral in both Form 1 and Form 2 + mixed speeds."""
+    tiles: dict[tuple[int, int], bytes] = {}
+    # Obj 1 ('f1_def', 15x1, 3 frames, {1..2}x2, speed=2): frame 2->1 swaps all 15 slots (>12 budget!)
+    f1_frames = [[_pat(10 + f * 20 + i) for i in range(15)] for f in range(3)]
+    for f, row in enumerate(f1_frames):
+        for dx in range(15):
+            tiles[(dx, f)] = row[dx]
+
+    # Obj 2 ('f2_def', 16x1, 5 frames, {1..3}x2, speed=2):
+    # Form 1 = 16*5 = 80 B; f0=[base], f1=[differs in 1 slot], f2=[differs in 1 slot], f3=[differs in ALL 14? Wait!]
+    # Make norm changes 1/step (total 5) + loop-back 3->1 change ALL 14 slots!
+    # Wait: S=16, F=5 -> Form 1=80 B; Form 2 = 16 + 1 + 12 + (3+3+3+3+9) + 29 = 102 B > 80 B!
+    # Increase F to 10 (group {1..3}x2, 1 change on norm steps 0..9, 14 changes on loop 3->1):
+    # Form 1 = 16 * 10 = 160 B; Form 2 = 16 + 1 + 22 + 9*3 + 29 + 29 = 124 B < 160 B -> FORM 2!!
+    base16 = [_pat(100 + i) for i in range(16)]
+    alt16 = [_pat(150 + i) for i in range(16)]
+    f2_frames: list[list[bytes]] = []
+    # f=0: base16
+    # f=1: base16 with slot 0 = alt16[0]
+    # f=2: base16 with slot 0..1 = alt16[0..1] (1 change from 1->2)
+    # f=3: alt16[0..14], base16[15] -> make f=3 change ALL 14 slots from f=2 so BOTH 2->3 and 3->1 change >=13 slots (>12)!
+    # Wait if f3->f4 restores 13 slots, cost is 1+2*13=27; f2->f3=27; f3->f1=27 -> total deltas: 3 + 3 + 27 + 27 + 6*3 + 27 = 132 + 39 = 171 > 160!
+    # Increase F to 14! Form 1 = 16 * 14 = 224 B; Form 2 = 16 + 1 + 30 + (3+3+29+29+10*3+29) = 47 + 123 = 170 B < 224 B!!
+    cur = list(base16)
+    f2_frames.append(list(cur))                  # f=0
+    cur[0] = alt16[0]; f2_frames.append(list(cur))   # f=1 (1 chg)
+    cur[1] = alt16[1]; f2_frames.append(list(cur))   # f=2 (1 chg)
+    cur = alt16[:15] + [base16[15]]; f2_frames.append(list(cur))  # f=3 (13 chg vs f2, 14 chg vs f1!)
+    cur = [base16[0]] + list(base16[1:]); cur[14] = alt16[14]; f2_frames.append(list(cur))  # wait keep 1 chg 3->4? Use only f3=alt16[:14]+base16[14:], then f4..f13 step back 1 at a time!
+    # Rebuild cleanly:
+    f2_frames = [list(base16)]  # f=0
+    r1 = list(base16); r1[0] = alt16[0]; f2_frames.append(r1)  # f=1 (diff from f0 = {0})
+    r2 = list(r1); r2[1] = alt16[1]; f2_frames.append(r2)      # f=2 (diff from f1 = {1})
+    r3 = list(alt16); f2_frames.append(r3)                     # f=3 (diff from f2 = 14 slots {2..15}!)
+    # From f=3 (alt16), change 1 slot per step from f=4..f=13 back toward base16 so each step has 1 chg, and 13->0 has 6 chgs!
+    c_seq = list(alt16)
+    for k in range(4, 14):
+        c_seq = list(c_seq)
+        c_seq[k - 4] = base16[k - 4]
+        f2_frames.append(list(c_seq))
+    # Check diffs: 0->1(1),1->2(1),2->3(14),3->4..12->13(1*10),13->0(6), 3->1(15!)
+    # Form 1 = 16*14 = 224; Form 2 = 16+1+30 + (3+3+29 + 30 + 13 + 31) = 47 + 109 = 156 B < 224 B!
+    for f, row in enumerate(f2_frames):
+        for dx in range(16):
+            tiles[(dx, 3 + f)] = row[dx]
+
+    # Obj 3: fast ungrouped companion @ speed=1 (y=17, x=0..1)
+    peer_pats = [_pat(220), _pat(221)]
+    tiles[(0, 17)] = peer_pats[0]
+    tiles[(1, 17)] = peer_pats[1]
+
+    doc = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "g",
+                "image": "g.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+            }
+        ],
+        "objects": [
+            {
+                "id": 1, "name": "f1_def", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 2,
+                "frames": [{"x": 0, "y": f, "w": 15, "h": 1} for f in range(3)],
+                "groups": [{"first": 1, "last": 2, "repeat": 2}],
+            },
+            {
+                "id": 2, "name": "f2_def", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 2,
+                "frames": [{"x": 0, "y": 3 + f, "w": 16, "h": 1} for f in range(14)],
+                "groups": [{"first": 1, "last": 3, "repeat": 2}],
+            },
+            {
+                "id": 3, "name": "fast_peer", "group": "g", "tags": [],
+                "non-blockable": True, "colpf3": False, "animation_speed": 1,
+                "frames": [{"x": 0, "y": 17, "w": 1, "h": 1}, {"x": 1, "y": 17, "w": 1, "h": 1}],
+            },
+        ],
+        "rooms": [
+            {"id": 1, "name": "R_F1Def", "pos": [0, 0], "row_groups": ["g"], "placed": [{"object": 1, "x": 0, "y": 0}, {"object": 3, "x": 20, "y": 0}]},
+            {"id": 2, "name": "R_F2Def", "pos": [1, 0], "row_groups": ["g"], "placed": [{"object": 2, "x": 0, "y": 0}, {"object": 3, "x": 20, "y": 0}]},
+        ],
+        "teleports": [],
+        "start": {"room": 1, "x": 0, "y": 0},
+    }
+
+    mpu, mem, labels, report = _build_anim_test_env(
+        tmp_path, doc, lambda tx, ty: tiles.get((tx, ty), bytes(8)), tiles_x=16, tiles_y=18
+    )
+    assert report.anim_stats[0].form == "form1"
+    assert report.anim_stats[1].form == "form2"
+    ch_base = labels["CHARSET_G"]
+    vram = labels["SCREEN_VRAM"]
+
+    def _slot(c: int) -> bytes:
+        return bytes(mem[ch_base + c * 8 : ch_base + (c + 1) * 8])
+
+    # Room 1: Form 1 grouped (15 slots, speed=2, {1..2}x2 -> frames 0,1,2,1,2,0) + speed=1 companion
+    mpu.x = 1
+    _run_subroutine_cycles(mpu, labels["ROOM_DRAW"])
+    mpu.x = 1
+    _run_subroutine_cycles(mpu, labels["ROOM_ANIM_INIT"])
+    c1 = [mem[vram + dx] for dx in range(15)]
+    cp = mem[vram + 20]
+    # Tick 1: fast_peer steps; Tick 2: f1_def -> frame 1 (12/15 copied, 3 deferred); Tick 3: remaining 3 copied!
+    for _ in range(2):
+        _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+        assert mem[labels["ANIM_COPY_COUNT"]] <= 12
+    assert mem[labels["ANIM_ST_FRAME"] + 0] == 1 and mem[labels["ANIM_COPY_COUNT"]] == 12
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # tick 3: finishes deferred f1_def + steps fast_peer
+    assert [_slot(c) for c in c1] == f1_frames[1]
+    assert _slot(cp) == peer_pats[1]
+    # Advance through tick 6 (f2 -> loop-back to f1 with 15 copies deferred across tick 6 & 7!) -> ends in f1_frames[1]
+    for _ in range(3):
+        _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+        assert mem[labels["ANIM_COPY_COUNT"]] <= 12
+    assert mem[labels["ANIM_ST_FRAME"] + 0] == 1  # loop-back occurred cleanly on tick 6!
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # tick 7 finishes remaining loop-back copies!
+    assert [_slot(c) for c in c1] == f1_frames[1]
+    _run_subroutine_cycles(mpu, labels["ANIM_TICK"])  # tick 8 (2nd pass 1->2, exact non-drifted timing!)
+    assert mem[labels["ANIM_ST_FRAME"] + 0] == 2
+
+    # Room 2: Form 2 grouped loop-back under 12-slot budget deferral ({1..3}x2: tick 2->f1, 4->f2, 6->f3(14 chg), 8->loop 3->1 (15 chg!))
+    mpu.x = 2
+    _run_subroutine_cycles(mpu, labels["ROOM_DRAW"])
+    mpu.x = 2
+    _run_subroutine_cycles(mpu, labels["ROOM_ANIM_INIT"])
+    c2 = [mem[vram + dx] for dx in range(16)]
+    for t in range(1, 10):
+        _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+        assert mem[labels["ANIM_COPY_COUNT"]] <= 12
+    # At tick 9: f2_def is on target frame 1 (looped back on tick 8!) and finished deferred 15-slot loop-back copy cleanly!
+    assert mem[labels["ANIM_ST_FRAME"] + 0] == 1
+    assert mem[labels["ANIM_ST_REP"] + 0] == 1
+    assert [_slot(c) for c in c2] == f2_frames[1]
+    # Tick 10->f2 (1 chg), tick 12->f3, tick 14->leaves group to f4 (zero timing drift!)
+    for _ in range(5):
+        _run_subroutine_cycles(mpu, labels["ANIM_TICK"])
+    assert mem[labels["ANIM_ST_FRAME"] + 0] == 4 and mem[labels["ANIM_ST_CNT"] + 0] == 2

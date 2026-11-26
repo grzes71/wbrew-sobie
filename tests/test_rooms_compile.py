@@ -964,6 +964,13 @@ def simulate_room_animations_from_asm(
     rptr = asm_img.read_id_ptr("room_anim_lo", "room_anim_hi", room_id)
     anim_ids = [asm_img.memory[rptr + i] for i in range(rcount)]
     pool_count = asm_img.equates["ANIM_POOL_COUNT"]
+    dur_bytes = asm_img.equates["ANIM_DUR_BYTES"]
+    dur_wide = asm_img.equates["ANIM_DUR_WIDE"]
+    grp_bytes = asm_img.equates["ANIM_GRP_BYTES"]
+    f2_grp_cnt = asm_img.equates["ANIM_F2_GRP_COUNT"]
+    flag_var_dur = asm_img.equates["ANIM_FLAG_VAR_DUR"]
+    flag_groups = asm_img.equates["ANIM_FLAG_GROUPS"]
+    bank_mask = asm_img.equates["ANIM_BANK_MASK"]
 
     def _read_u8(lbl: str, idx: int) -> int:
         return asm_img.memory[asm_img.symbols[lbl] + idx]
@@ -972,6 +979,45 @@ def simulate_room_animations_from_asm(
         return asm_img.memory[asm_img.symbols[lbl_lo] + idx] | (
             asm_img.memory[asm_img.symbols[lbl_hi] + idx] << 8
         )
+
+    def _frame_duration(aid: int, frame_idx: int) -> int:
+        flags = _read_u8("anim_flags", aid)
+        if dur_bytes == 0 or not (flags & flag_var_dur):
+            return _read_u8("anim_speed", aid)
+        if dur_wide == 0:
+            off = _read_u8("anim_speed", aid)
+            return asm_img.memory[asm_img.symbols["anim_dur_pool"] + off + frame_idx]
+        dptr = _read_u16("anim_dur_lo", "anim_dur_hi", aid)
+        return asm_img.memory[dptr + frame_idx]
+
+    def _next_frame_and_pass(aid: int, cur_f: int, cur_rep: int) -> tuple[int, int, int]:
+        """Return (next_f, next_rep, delta_idx)."""
+        nframes = _read_u8("anim_frames", aid)
+        flags = _read_u8("anim_flags", aid)
+        if grp_bytes == 0 or not (flags & flag_groups):
+            nf = (cur_f + 1) % nframes
+            return nf, 0, nf
+        gptr = _read_u16("anim_grp_lo", "anim_grp_hi", aid)
+        ctrl = asm_img.memory[gptr + cur_f]
+        if (ctrl & 0x80) and cur_rep > 1:
+            gi = ctrl & 0x7F
+            first_g = asm_img.memory[gptr + nframes + 2 * gi + 1]
+            return first_g, cur_rep - 1, nframes + gi
+        nf = (cur_f + 1) % nframes
+        nctrl = asm_img.memory[gptr + nf]
+        if nctrl != 0 and not (nctrl & 0x80):
+            return nf, asm_img.memory[gptr + nctrl], nf
+        return nf, (0 if (ctrl & 0x80) else cur_rep), nf
+
+    def _init_pass(aid: int) -> int:
+        flags = _read_u8("anim_flags", aid)
+        if grp_bytes == 0 or not (flags & flag_groups):
+            return 0
+        gptr = _read_u16("anim_grp_lo", "anim_grp_hi", aid)
+        c0 = asm_img.memory[gptr]
+        if c0 != 0 and not (c0 & 0x80):
+            return asm_img.memory[gptr + c0]
+        return 0
 
     def _pattern_bytes(bank: int, pat_idx: int) -> bytes:
         if pool_count <= 1:
@@ -982,47 +1028,77 @@ def simulate_room_animations_from_asm(
             out[r] = asm_img.memory[ptr + pat_idx]
         return bytes(out)
 
-    def _frame_patterns(aid: int) -> list[list[bytes]]:
+    def _obj_model(aid: int) -> tuple[list[list[bytes]], dict[int, list[bytes]] | None]:
+        """Return (seq_patterns_per_frame, form2_transition_map or None)."""
         nframes = _read_u8("anim_frames", aid)
         nslots = _read_u8("anim_slots", aid)
         flags = _read_u8("anim_flags", aid)
-        bank = flags & 0x7F
+        bank = flags & bank_mask
         use_f2 = bool(flags & 0x80)
+        has_grp = bool(flags & flag_groups)
         dptr = _read_u16("anim_data_lo", "anim_data_hi", aid)
         if not use_f2:
-            return [
+            seq = [
                 [_pattern_bytes(bank, asm_img.memory[dptr + f * nslots + s]) for s in range(nslots)]
                 for f in range(nframes)
             ]
-        # Form 2: reconstruct per-frame slots cleanly starting from frame 0 and applying cyclic deltas
-        cur_pats = list(asm_img.memory[dptr : dptr + nslots])
-        frames_out: list[list[bytes]] = [[_pattern_bytes(bank, p) for p in cur_pats]]
+            return seq, None
+        f0_pats = list(asm_img.memory[dptr : dptr + nslots])
         dtbl = dptr + nslots
-        for k in range(1, nframes):
-            dp = asm_img.memory[dtbl + k] | (asm_img.memory[dtbl + nframes + k] << 8)
+        if has_grp and f2_grp_cnt > 0:
+            t_count = asm_img.memory[dtbl]
+            dtbl += 1
+        else:
+            t_count = nframes
+        trans_deltas: dict[int, list[tuple[int, int]]] = {}
+        for ti in range(t_count):
+            dp = asm_img.memory[dtbl + ti] | (asm_img.memory[dtbl + t_count + ti] << 8)
             cnt = asm_img.memory[dp]
-            for pi in range(cnt):
-                cur_pats[asm_img.memory[dp + 1 + 2 * pi]] = asm_img.memory[dp + 2 + 2 * pi]
-            frames_out.append([_pattern_bytes(bank, p) for p in cur_pats])
-        # Verify cyclic delta 0 returns back cleanly to frame 0!
-        dp0 = asm_img.memory[dtbl] | (asm_img.memory[dtbl + nframes] << 8)
-        for pi in range(asm_img.memory[dp0]):
-            cur_pats[asm_img.memory[dp0 + 1 + 2 * pi]] = asm_img.memory[dp0 + 2 + 2 * pi]
-        assert [_pattern_bytes(bank, p) for p in cur_pats] == frames_out[0]
-        return frames_out
+            trans_deltas[ti] = [
+                (asm_img.memory[dp + 1 + 2 * pi], asm_img.memory[dp + 2 + 2 * pi])
+                for pi in range(cnt)
+            ]
+        # Reconstruct seq via normal transitions 0..F-1
+        cur_pats = list(f0_pats)
+        seq_f2: list[list[bytes]] = [[_pattern_bytes(bank, p) for p in cur_pats]]
+        for k in range(1, nframes):
+            for s, p in trans_deltas[k]:
+                cur_pats[s] = p
+            seq_f2.append([_pattern_bytes(bank, p) for p in cur_pats])
+        # Verify loop deltas and return delta dictionary in pat bytes
+        trans_pats = {ti: pairs for ti, pairs in trans_deltas.items()}
+        return seq_f2, {
+            0: [_pattern_bytes(bank, p) for p in f0_pats],
+            **{
+                ti + 1000: [(s, _pattern_bytes(bank, p)) for s, p in pairs]  # type: ignore[misc]
+                for ti, pairs in trans_pats.items()
+            },
+        }
 
-    all_frames = {aid: _frame_patterns(aid) for aid in anim_ids}
-    counters = [_read_u8("anim_speed", aid) for aid in anim_ids]
+    # Precompute Form 1 frames & Form 2 stateful delta application
+    models = {aid: _obj_model(aid) for aid in anim_ids}
+    cur_slots = {aid: [bytes(b) for b in models[aid][0][0]] for aid in anim_ids}
     frames = [0] * rcount
-    snapshots: list[dict[int, list[bytes]]] = [{aid: all_frames[aid][0] for aid in anim_ids}]
+    passes = [_init_pass(aid) for aid in anim_ids]
+    counters = [_frame_duration(aid, 0) for aid in anim_ids]
+    snapshots: list[dict[int, list[bytes]]] = [{aid: [bytes(b) for b in cur_slots[aid]] for aid in anim_ids}]
 
     for _t in range(ticks):
         for i, aid in enumerate(anim_ids):
             counters[i] -= 1
             if counters[i] == 0:
-                counters[i] = _read_u8("anim_speed", aid)
-                frames[i] = (frames[i] + 1) % _read_u8("anim_frames", aid)
-        snapshots.append({aid: all_frames[aid][frames[i]] for i, aid in enumerate(anim_ids)})
+                nf, nrep, didx = _next_frame_and_pass(aid, frames[i], passes[i])
+                frames[i] = nf
+                passes[i] = nrep
+                counters[i] = _frame_duration(aid, nf)
+                seq, f2_map = models[aid]
+                if f2_map is None:
+                    cur_slots[aid] = [bytes(b) for b in seq[nf]]
+                else:
+                    for s, pat_b in f2_map[1000 + didx]:  # type: ignore[misc]
+                        cur_slots[aid][s] = pat_b  # type: ignore[index]
+                    assert cur_slots[aid] == seq[nf]
+        snapshots.append({aid: [bytes(b) for b in cur_slots[aid]] for aid in anim_ids})
     return snapshots
 
 
@@ -1427,4 +1503,438 @@ def test_animation_compile_errors_and_mads(tmp_path: Path) -> None:
         check=False,
     )
     assert proc.returncode == 0, f"MADS failed:\n{proc.stdout}\n{proc.stderr}"
+
+
+def test_per_frame_durations_uniform_dedup_wide_and_validation(tmp_path: Path) -> None:
+    """Verify uniform vs non-uniform duration resolution, dedup, speed=0 warning, wide mode, and determinism."""
+    proj_dir = tmp_path / "dur_proj"
+    proj_dir.mkdir()
+    _write_png(proj_dir / "g.png", 6, 4, lambda gx, gy: _unique_tile(gy * 6 + gx + 1))
+
+    doc: dict[str, Any] = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "g",
+                "image": "g.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+            }
+        ],
+        "objects": [
+            # Obj 1: all default 0 -> uniform speed 4 (0 extra duration bytes)
+            {
+                "id": 1,
+                "name": "uni_default",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 4,
+                "frames": [{"x": 0, "y": 0, "w": 1, "h": 1}, {"x": 1, "y": 0, "w": 1, "h": 1}],
+            },
+            # Obj 2: all overridden to 7 -> still uniform effective duration 7! (0 extra duration bytes)
+            {
+                "id": 2,
+                "name": "uni_overridden",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 4,
+                "frames": [
+                    {"x": 2, "y": 0, "w": 1, "h": 1, "duration": 7},
+                    {"x": 3, "y": 0, "w": 1, "h": 1, "duration": 7},
+                ],
+            },
+            # Obj 3: variable [2, 5, 3] (override 2, fallback 5, override 3)
+            {
+                "id": 3,
+                "name": "var_a",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 5,
+                "frames": [
+                    {"x": 0, "y": 1, "w": 1, "h": 1, "duration": 2},
+                    {"x": 1, "y": 1, "w": 1, "h": 1},
+                    {"x": 2, "y": 1, "w": 1, "h": 1, "duration": 3},
+                ],
+            },
+            # Obj 4: different speed (3) & explicit overrides [2, 5, 0->3] -> resolves to identical [2, 5, 3] and deduplicates!
+            {
+                "id": 4,
+                "name": "var_b_dedup",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 3,
+                "frames": [
+                    {"x": 3, "y": 1, "w": 1, "h": 1, "duration": 2},
+                    {"x": 4, "y": 1, "w": 1, "h": 1, "duration": 5},
+                    {"x": 5, "y": 1, "w": 1, "h": 1},
+                ],
+            },
+            # Obj 5: speed=0 with frame duration override -> NOT animated, no table, emits warning
+            {
+                "id": 5,
+                "name": "static_with_dur",
+                "group": "g",
+                "tags": [],
+                "non-blockable": False,
+                "colpf3": False,
+                "animation_speed": 0,
+                "frames": [
+                    {"x": 0, "y": 2, "w": 1, "h": 1, "duration": 10},
+                    {"x": 1, "y": 2, "w": 1, "h": 1, "duration": 20},
+                ],
+            },
+        ],
+        "rooms": [
+            {
+                "id": 1,
+                "name": "r1",
+                "pos": [0, 0],
+                "row_groups": ["g"],
+                "placed": [
+                    {"object": 1, "x": 0, "y": 0},
+                    {"object": 2, "x": 2, "y": 0},
+                    {"object": 3, "x": 4, "y": 0},
+                    {"object": 4, "x": 6, "y": 0},
+                    {"object": 5, "x": 8, "y": 0},
+                ],
+            }
+        ],
+        "teleports": [],
+        "start": {"room": 1, "x": 8, "y": 0},
+    }
+    yf = proj_dir / "rooms.yaml"
+    yf.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    out1 = tmp_path / "dur_out1"
+    out2 = tmp_path / "dur_out2"
+    res1 = compile_rooms(yf, out_dir=out1)
+    res2 = compile_rooms(yf, out_dir=out2)
+    assert res1.files == res2.files  # Strictly deterministic
+
+    rep = res1.report
+    assert rep.anim_count == 4
+    assert rep.anim_uniform_count == 2
+    assert rep.anim_var_dur_count == 2
+    assert rep.anim_dur_table_count == 1  # var_a and var_b_dedup share one 3-byte table!
+    assert rep.anim_dur_bytes == 3
+    assert rep.anim_stats[0].effective_durations == (4, 4)
+    assert rep.anim_stats[1].effective_durations == (7, 7)
+    assert rep.anim_stats[2].effective_durations == (2, 5, 3)
+    assert rep.anim_stats[3].effective_durations == (2, 5, 3)
+    assert any(w.code == "ANIM_FRAME_DURATION_SPEED_ZERO" for w in rep.warnings)
+    assert "anim_dur_lo" not in res1.files["animations.asm"]
+
+    asm_img = parse_generated_asm(out1)
+    assert asm_img.equates["ANIM_DUR_WIDE"] == 0
+    assert asm_img.equates["ANIM_DUR_BYTES"] == 3
+    assert asm_img.read_id_byte("obj_anim", 5) == 0  # static_with_dur is not animated
+    snaps = simulate_room_animations_from_asm(asm_img, 1, 15)
+    # Obj 3 (aid=2): f0 stays ticks 0..1 (len 2), transitions to f1 at tick 2, f2 at tick 7, f0 at tick 10
+    assert snaps[1][2] == snaps[0][2]
+    assert snaps[2][2] != snaps[0][2]
+    assert snaps[6][2] == snaps[2][2]
+    assert snaps[7][2] != snaps[2][2] and snaps[7][2] != snaps[0][2]
+    assert snaps[9][2] == snaps[7][2]
+    assert snaps[10][2] == snaps[0][2]
+
+    # Out-of-range durations rejected
+    import copy
+    for bad_dur in (-1, 256):
+        bad_doc = copy.deepcopy(doc)
+        bad_doc["objects"][2]["frames"][0]["duration"] = bad_dur
+        by = proj_dir / f"bad_{bad_dur}.yaml"
+        by.write_text(yaml.safe_dump(bad_doc, sort_keys=False), encoding="utf-8")
+        with pytest.raises(RoomCompileError):
+            compile_rooms(by, out_dir=tmp_path / f"bad_out_{bad_dur}")
+
+    # Wide fallback (> 256 unique duration bytes): 18 animated objects x 16 frames = 288 unique duration bytes
+    wide_dir = tmp_path / "dur_wide"
+    wide_dir.mkdir()
+    _write_png(wide_dir / "w.png", 16, 4, lambda gx, gy: _unique_tile(gy * 16 + gx + 1))
+    wide_objs = []
+    wide_placed = []
+    for i in range(18):
+        durs = [((i * 11 + f) % 250) + 1 for f in range(16)]
+        durs[1] = durs[0] + 1  # Ensure non-uniform
+        wide_objs.append(
+            {
+                "id": i + 1,
+                "name": f"wobj_{i}",
+                "group": "w",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 5,
+                "frames": [
+                    {"x": f % 16, "y": i % 4, "w": 1, "h": 1, "duration": durs[f]}
+                    for f in range(16)
+                ],
+            }
+        )
+        wide_placed.append({"object": i + 1, "x": (i * 2) % 40, "y": i // 2})
+    wide_doc = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "w",
+                "image": "w.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+            }
+        ],
+        "objects": wide_objs,
+        "rooms": [{"id": 1, "name": "rw", "pos": [0, 0], "row_groups": ["w"], "placed": wide_placed}],
+        "teleports": [],
+        "start": {"room": 1, "x": 0, "y": 0},
+    }
+    wy = wide_dir / "rooms.yaml"
+    wy.write_text(yaml.safe_dump(wide_doc, sort_keys=False), encoding="utf-8")
+    w_out = tmp_path / "dur_wide_out"
+    res_w = compile_rooms(wy, out_dir=w_out)
+    assert res_w.report.anim_dur_table_count == 18
+    assert res_w.report.anim_dur_bytes == 288 + 2 * 18
+    assert "anim_dur_lo" in res_w.files["animations.asm"]
+    asm_w = parse_generated_asm(w_out)
+    assert asm_w.equates["ANIM_DUR_WIDE"] == 1
+    snaps_w = simulate_room_animations_from_asm(asm_w, 1, 10)
+    assert len(snaps_w) == 11
+
+
+def test_frame_groups_compiler_both_forms_playback_dedup_and_validation(tmp_path: Path) -> None:
+    """Verify group tables, Form 1 vs Form 2 delta equivalence, ungrouped zero-cost, and validation."""
+    import copy
+
+    proj_dir = tmp_path / "grp_comp"
+    proj_dir.mkdir()
+    # 16x16 sheet: make each tile unique
+    _write_png(proj_dir / "g.png", 16, 16, lambda gx, gy: _unique_tile(gy * 16 + gx + 1))
+
+    # Build a Form 1 and Form 2 version of the EXACT same logical animation sequence (frames 0..4, group {1..3} x3):
+    # - Obj 1 ('f1_ex', 1x1, 5 frames -> Form 1 because 1*5=5B <= Form 2)
+    # - Obj 2 ('f2_ex', 6x1, 5 frames -> same frames repeated 6 slots? Wait make 8x1 where each step changes 1 slot -> Form 2:
+    #   S=8, F=5 -> Form 1 = 40 B; normal changes: 1/step * 5 + loop-back 3->1: say 3 changes -> Form 2 = 8 + 1 + 12 + 5*3 + 7 = 43 B -> use 10 frames!
+    #   Even cleaner: S=10, F=10, only 1 slot changes per step and 3->1 changes 1 or 2 slots -> F1 = 100 B, F2 = ~65 B!
+    # Also test:
+    #   Obj 3 ('start_grp', 1x1, frames 0..4, {0..2} x2)
+    #   Obj 4 ('end_grp', 1x1, frames 0..4, {2..4} x2)
+    #   Obj 5 ('all_grp', 1x1, frames 0..2, {0..2} x3 -> redundant group, zero-cost!)
+    #   Obj 6 ('two_grps', 1x1, frames 0..5, {0..1} x2 + {3..4} x3, with per-frame durations)
+    #   Obj 7 ('ungrouped', 1x1, frames 0..1, no groups -> byte-for-byte unaffected!)
+    # Actually let's check S=10, F=5 where slots 0..9 stay identical except slot k changes on frame k? Wait let's test Obj 2 with 6 frames?
+    # Keep Obj 2 as exact frames 0..4 matching example:
+    # Let S=10, F=5: f0=[all A], f1=[slot0=B0], f2=[slot1=B1], f3=[slot2=B2], f4=[slot3=B3] ->
+    # norm transitions: 0->1 (1), 1->2 (2), 2->3 (2), 3->4 (2), 4->0 (1) + loop 3->1 (2: slot2=A, slot0=B0)
+    # Form 1 = 10*5 = 50 B; Form 2 = 10 + 1 + 12 + (3+5+5+5+3 + 5) = 23 + 26 = 49 B < 50 B -> FORM 2!!
+    # Let's make S=12, F=5 so F1 = 60 B, F2 = 12 + 1 + 12 + 26 = 51 B -> FORM 2 cleanly!
+    def tile_rgba_seq(gx: int, gy: int) -> list[list[int]]:
+        return _unique_tile(gy * 16 + gx + 1)
+
+    tiles_override: dict[tuple[int, int], list[list[int]]] = {}
+    base_tiles = [_unique_tile(60 + dx) for dx in range(12)]
+    alt_tiles = [_unique_tile(80 + dx) for dx in range(12)]
+    # Obj 2 ('f2_ex', 12x1, 10 frames, {1..3}x3) at y=2..11: every column varies across the 10 frames,
+    # 1 slot changes per normal step -> Form 1 = 12*10=120 B, Form 2 = 12+1+22+9*3+9+7 = 78 B < 120 B -> Form 2!
+    cur12 = list(base_tiles)
+    for f in range(10):
+        if f > 0:
+            cur12 = list(cur12)
+            cur12[f % 12] = alt_tiles[f % 12]
+        for dx in range(12):
+            tiles_override[(dx, 2 + f)] = cur12[dx]
+    _write_png(
+        proj_dir / "g.png",
+        16,
+        16,
+        lambda gx, gy: tiles_override.get((gx, gy), tile_rgba_seq(gx, gy)),
+    )
+
+    base_doc: dict[str, Any] = {
+        "version": 5,
+        "object_groups": [
+            {
+                "name": "g",
+                "image": "g.png",
+                "pixel_mapping": [0, 1, 2, 3],
+                "palettes": [{"name": "default", "colbk": 0, "colpf0": 1, "colpf1": 2, "colpf2": 3, "colpf3": 4}],
+            }
+        ],
+        "objects": [
+            {
+                "id": 1,
+                "name": "f1_ex",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 1,
+                "frames": [{"x": i, "y": 0, "w": 1, "h": 1} for i in range(5)],
+                "groups": [{"first": 1, "last": 3, "repeat": 3}],
+            },
+            {
+                "id": 2,
+                "name": "f2_ex",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 1,
+                "frames": [{"x": 0, "y": 2 + f, "w": 12, "h": 1} for f in range(10)],
+                "groups": [{"first": 1, "last": 3, "repeat": 3}],
+            },
+            {
+                "id": 3,
+                "name": "start_grp",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 1,
+                "frames": [{"x": 5 + i, "y": 0, "w": 1, "h": 1} for i in range(5)],
+                "groups": [{"first": 0, "last": 2, "repeat": 2}],
+            },
+            {
+                "id": 4,
+                "name": "two_grps",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 2,
+                "frames": [
+                    {"x": i, "y": 1, "w": 1, "h": 1, "duration": (1 if i != 1 else 2)}
+                    for i in range(6)
+                ],
+                "groups": [{"first": 0, "last": 1, "repeat": 2}, {"first": 3, "last": 4, "repeat": 3}],
+            },
+            {
+                "id": 5,
+                "name": "all_grp",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 1,
+                "frames": [{"x": 10 + i, "y": 0, "w": 1, "h": 1} for i in range(3)],
+                "groups": [{"first": 0, "last": 2, "repeat": 4}],
+            },
+            {
+                "id": 6,
+                "name": "f1_dup",
+                "group": "g",
+                "tags": [],
+                "non-blockable": True,
+                "colpf3": False,
+                "animation_speed": 1,
+                "frames": [{"x": 6 + i, "y": 1, "w": 1, "h": 1} for i in range(5)],
+                "groups": [{"first": 1, "last": 3, "repeat": 3}],
+            },
+        ],
+        "rooms": [
+            {
+                "id": 1,
+                "name": "R",
+                "pos": [0, 0],
+                "row_groups": ["g"],
+                "placed": [
+                    {"object": 1, "x": 0, "y": 0},
+                    {"object": 2, "x": 2, "y": 0},
+                    {"object": 3, "x": 0, "y": 2},
+                    {"object": 4, "x": 2, "y": 2},
+                    {"object": 5, "x": 4, "y": 2},
+                    {"object": 6, "x": 6, "y": 2},
+                ],
+            }
+        ],
+        "teleports": [],
+        "start": {"room": 1, "x": 0, "y": 0},
+    }
+    yf = proj_dir / "rooms.yaml"
+    yf.write_text(yaml.safe_dump(base_doc, sort_keys=False), encoding="utf-8")
+    out1 = tmp_path / "g_out1"
+    out2 = tmp_path / "g_out2"
+    res1 = compile_rooms(yf, out_dir=out1)
+    res2 = compile_rooms(yf, out_dir=out2)
+    assert res1.files == res2.files  # deterministic
+
+    rep = res1.report
+    assert rep.anim_stats[0].form == "form1"
+    assert rep.anim_stats[1].form == "form2"
+    assert rep.anim_grouped_count == 5  # all_grp folded to 0 effective groups!
+    assert rep.anim_grp_table_count == 4  # f1_ex and f1_dup share identical group table!
+    assert rep.anim_grp_bytes > 0
+    assert rep.anim_extra_delta_bytes > 0
+
+    asm_img = parse_generated_asm(out1)
+    assert asm_img.equates["ANIM_F2_GRP_COUNT"] == 1
+    snaps = simulate_room_animations_from_asm(asm_img, 1, 14)
+
+    # Form 1 (aid=0) vs Form 2 (aid=1) both trace [0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 4, 0, 1, 2]
+    f1_pat_to_frame = {
+        asm_img.memory[asm_img.symbols[f"anim_pool0_b0"] + i] if False else bytes(
+            [asm_img.memory[asm_img.symbols[f"anim_pool0_b{r}"] + asm_img.memory[asm_img.symbols["anim_f1_0"] + f]] for r in range(8)]
+        ): f
+        for f in range(5)
+    }
+    f1_trace = [f1_pat_to_frame[snaps[t][0][0]] for t in range(14)]
+    assert f1_trace == [0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 4, 0, 1, 2]
+
+    # Form 2 slot patterns strictly follow frame index of [0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3]
+    f2_snaps = simulate_room_animations_from_asm(asm_img, 1, 20)
+    f2_by_frame = {
+        0: tuple(f2_snaps[0][1]),
+        1: tuple(f2_snaps[1][1]),
+        2: tuple(f2_snaps[2][1]),
+        3: tuple(f2_snaps[3][1]),
+        4: tuple(f2_snaps[10][1]),
+        5: tuple(f2_snaps[11][1]),
+        6: tuple(f2_snaps[12][1]),
+        7: tuple(f2_snaps[13][1]),
+        8: tuple(f2_snaps[14][1]),
+        9: tuple(f2_snaps[15][1]),
+    }
+    f2_unique = {v: k for k, v in f2_by_frame.items()}
+    f2_trace = [f2_unique[tuple(f2_snaps[t][1])] for t in range(20)]
+    assert f2_trace == [0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3]
+
+    # Check ungrouped project emits 0 group tables/bytes (identical to previous format)
+    no_grp_doc = copy.deepcopy(base_doc)
+    for o in no_grp_doc["objects"]:
+        o.pop("groups", None)
+    yf_plain = proj_dir / "plain.yaml"
+    yf_plain.write_text(yaml.safe_dump(no_grp_doc, sort_keys=False), encoding="utf-8")
+    res_plain = compile_rooms(yf_plain, out_dir=tmp_path / "plain_out")
+    assert res_plain.report.anim_grp_bytes == 0
+    assert res_plain.report.anim_extra_delta_bytes == 0
+    assert "anim_grp_lo" not in res_plain.files["animations.asm"]
+
+    # Validation errors & warnings
+    for mut in (
+        lambda d: d["objects"][0].__setitem__("groups", [{"first": 1, "last": 1, "repeat": 2}]),
+        lambda d: d["objects"][0].__setitem__("groups", [{"first": 0, "last": 2, "repeat": 0}]),
+        lambda d: d["objects"][0].__setitem__("groups", [{"first": 0, "last": 2, "repeat": 256}]),
+        lambda d: d["objects"][0].__setitem__("groups", [{"first": 2, "last": 5, "repeat": 2}]),
+        lambda d: d["objects"][0].__setitem__("groups", [{"first": 0, "last": 2, "repeat": 2}, {"first": 2, "last": 4, "repeat": 2}]),
+    ):
+        bd = copy.deepcopy(base_doc)
+        mut(bd)
+        by = proj_dir / "bad_grp.yaml"
+        by.write_text(yaml.safe_dump(bd, sort_keys=False), encoding="utf-8")
+        with pytest.raises(RoomCompileError):
+            compile_rooms(by, out_dir=tmp_path / "bad_grp_out")
+
+    w_doc = copy.deepcopy(base_doc)
+    w_doc["objects"][0]["animation_speed"] = 0
+    w_doc["objects"][0]["groups"] = [{"first": 1, "last": 2, "repeat": 1}]
+    wy = proj_dir / "warn_grp.yaml"
+    wy.write_text(yaml.safe_dump(w_doc, sort_keys=False), encoding="utf-8")
+    res_w = compile_rooms(wy, out_dir=tmp_path / "warn_grp_out")
+    w_codes = {w.code for w in res_w.report.warnings}
+    assert {"ANIM_GROUP_REPEAT_ONE", "ANIM_GROUPS_NOT_ANIMATED"}.issubset(w_codes)
 

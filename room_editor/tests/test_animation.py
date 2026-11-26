@@ -22,23 +22,33 @@ from room_editor.io.yaml_io import (
 from room_editor.model import (
     EMPTY_GLYPH_BYTES,
     MAX_ANIMATION_SPEED,
+    MAX_FRAME_DURATION,
     MAX_OBJECT_FRAMES,
     PROJECT_VERSION,
     ROOM_HEIGHT,
+    AddFrameGroupCommand,
     AddObjectFrameCommand,
+    FrameGroup,
     GameObject,
+    MoveFrameGroupCommand,
     ObjectGroup,
     ObjectInstance,
     Palette,
     NamedPalette,
     Project,
+    RemoveFrameGroupCommand,
     RemoveObjectFrameCommand,
     ReorderObjectFrameCommand,
     ReplaceObjectFrameCommand,
     Room,
+    SetFrameGroupRepeatCommand,
+    SetObjectFrameDurationCommand,
     StampRegion,
+    StartPosition,
     UndoStack,
     UpdateObjectCommand,
+    adjust_groups_on_remove,
+    adjust_groups_on_reorder,
     validate_project,
 )
 from room_editor.ui.objects_view import ObjectsView
@@ -629,6 +639,453 @@ def test_animation_ui_widgets_offscreen(qapp: QApplication, tmp_path: Path) -> N
     ov.close()
     rev.close()
     stamp.deleteLater()
+    ov.deleteLater()
+    rev.deleteLater()
+    qapp.processEvents()
+
+
+def test_frame_durations_model_commands_validation_yaml_and_preview_timing(
+    tmp_path: Path, qapp: QApplication
+) -> None:
+    """Test per-frame duration model, commands, validation, YAML round-trip, and UI preview timing."""
+    png_path = _make_tile_png(
+        tmp_path / "anim_dur.png",
+        4,
+        1,
+        lambda tx, _ty: bytes([0x11 * (tx + 1)] * 8),
+    )
+    img = load_png(png_path)
+    grp = ObjectGroup(name="g", image_path="anim_dur.png", image=img, image_status="ok")
+
+    # 1. Default 0, override > 0, effective computation, and speed=0 warning
+    obj = GameObject(
+        id=1,
+        name="torches",
+        group="g",
+        frames=[
+            StampRegion(0, 0, 1, 1),  # duration defaults to 0 -> uses speed
+            StampRegion(1, 0, 1, 1, duration=15),
+            StampRegion(2, 0, 1, 1, duration=25),
+        ],
+        animation_speed=10,
+    )
+    assert obj.frames[0].duration == 0
+    assert obj.effective_frame_durations() == [10, 15, 25]
+    assert obj.total_loop_ticks() == 50
+
+    room = Room(id=1, name="R1", pos=(0, 0), row_groups=["g"] * ROOM_HEIGHT, instances=[ObjectInstance(1, 2, 2)])
+    proj = Project(
+        object_groups=[grp],
+        objects=[obj],
+        rooms=[room],
+        start=StartPosition(1, 0, 0),
+    )
+    proj.rebuild_glyph_tables()
+    assert not any(i.severity == "error" for i in validate_project(proj))
+
+    # Warning when duration > 0 with speed == 0 (ignored, not animated)
+    obj_s0 = GameObject(
+        id=1,
+        name="static_dur",
+        group="g",
+        frames=[StampRegion(0, 0, 1, 1, duration=5), StampRegion(1, 0, 1, 1)],
+        animation_speed=0,
+    )
+    assert not obj_s0.is_animated
+    assert obj_s0.total_loop_ticks() == 0
+    proj_s0 = Project(
+        object_groups=[grp],
+        objects=[obj_s0],
+        rooms=[room],
+        start=StartPosition(1, 0, 0),
+    )
+    proj_s0.rebuild_glyph_tables()
+    warnings_s0 = [i.code for i in validate_project(proj_s0)]
+    assert "ANIM_FRAME_DURATION_SPEED_ZERO" in warnings_s0
+
+    # Validation rejects < 0 and > 255
+    for bad in (-1, MAX_FRAME_DURATION + 1):
+        bad_obj = GameObject(
+            id=1,
+            name="bad",
+            group="g",
+            frames=[StampRegion(0, 0, 1, 1, duration=bad)],
+            animation_speed=10,
+        )
+        proj_bad = Project(object_groups=[grp], objects=[bad_obj], rooms=[room])
+        codes = [i.code for i in validate_project(proj_bad)]
+        assert "OBJECT_INVALID_FRAME_DURATION" in codes
+
+    # 2. Frame commands preserve durations and undo/redo cleanly
+    stack = UndoStack()
+    with pytest.raises(ValueError):
+        SetObjectFrameDurationCommand(proj, obj, 0, 256)
+    with pytest.raises(ValueError):
+        SetObjectFrameDurationCommand(proj, obj, 0, -1)
+
+    stack.push_and_execute(SetObjectFrameDurationCommand(proj, obj, 0, 8))
+    assert [f.duration for f in obj.frames] == [8, 15, 25]
+    stack.undo()
+    assert [f.duration for f in obj.frames] == [0, 15, 25]
+    stack.redo()
+    assert [f.duration for f in obj.frames] == [8, 15, 25]
+
+    # Add frame gets duration 0
+    stack.push_and_execute(AddObjectFrameCommand(proj, obj, StampRegion(3, 0, 1, 1, duration=99)))
+    assert obj.frames[3].duration == 0
+    assert [f.duration for f in obj.frames] == [8, 15, 25, 0]
+
+    # Replace preserves duration
+    stack.push_and_execute(ReplaceObjectFrameCommand(proj, obj, 1, StampRegion(3, 0, 1, 1)))
+    assert obj.frames[1].duration == 15
+
+    # UpdateObjectCommand region preserves frame 0 duration
+    stack.push_and_execute(UpdateObjectCommand(proj, obj, region=StampRegion(0, 0, 1, 1)))
+    assert obj.frames[0].duration == 8
+
+    # Reorder and remove keep each frame's duration with its frame
+    stack.push_and_execute(ReorderObjectFrameCommand(proj, obj, 0, 2))
+    assert [f.duration for f in obj.frames] == [15, 25, 8, 0]
+    stack.push_and_execute(RemoveObjectFrameCommand(proj, obj, 1))
+    assert [f.duration for f in obj.frames] == [15, 8, 0]
+
+    # 3. YAML serialization omits duration==0 cleanly and round-trips overrides byte-for-byte
+    obj_no_dur = GameObject(
+        id=1,
+        name="plain",
+        group="g",
+        frames=[StampRegion(0, 0, 1, 1), StampRegion(1, 0, 1, 1)],
+        animation_speed=10,
+    )
+    proj_plain = Project(object_groups=[grp], objects=[obj_no_dur], rooms=[room])
+    txt_plain = serialize_project_to_yaml(proj_plain)
+    assert "duration" not in txt_plain
+
+    yfile = tmp_path / "dur.yaml"
+    save_project(proj, yfile)
+    txt_override_1 = yfile.read_text(encoding="utf-8")
+    assert "duration: 15" in txt_override_1
+    assert "duration: 8" in txt_override_1
+    # Frame 2 (duration 0) must not emit `duration: 0`
+    assert "duration: 0" not in txt_override_1
+    loaded = load_project(yfile)
+    assert [f.duration for f in loaded.project.objects[0].frames] == [15, 8, 0]
+    assert serialize_project_to_yaml(loaded.project) == txt_override_1
+
+    # Out-of-range duration in YAML raises ProjectIOError
+    bad_yaml = txt_override_1.replace("duration: 15", "duration: 300")
+    with pytest.raises(ProjectIOError):
+        deserialize_project_from_yaml(bad_yaml, base_dir=tmp_path)
+
+    # 4. Offscreen UI controls & preview timing
+    pal_table = load_default_pal_palette()
+    renderer = QtRenderer(pal_table)
+    ov = ObjectsView(renderer, pal_table)
+    ov.set_context(proj, UndoStack())
+    sw = ov._stamp_widget
+    sw.set_selected_frame_index(0)
+    assert sw._spin_frame_duration.value() == 15
+    assert "= 0.30 s" in sw._lbl_frame_effective_time.text()
+    assert "33 ticks" in sw._lbl_loop_total.text()
+    sw.set_selected_frame_index(2)
+    assert sw._spin_frame_duration.value() == 0
+    assert "= object's 0.20 s" in sw._lbl_frame_effective_time.text()
+
+    # Spinbox change dispatches undoable command
+    sw._spin_frame_duration.setValue(4)
+    assert obj.frames[2].duration == 4
+
+    # StampImageWidget preview schedules single-shot interval per effective frame duration
+    sw.set_selected_frame_index(0)
+    sw._on_toggle_play_preview()
+    assert sw._preview_playing
+    assert sw._anim_timer.isSingleShot()
+    assert sw._anim_timer.interval() == 15 * 20
+    sw._on_anim_timer_tick()
+    assert sw._preview_frame_idx == 1
+    assert sw._anim_timer.interval() == 8 * 20
+    sw._on_anim_timer_tick()
+    assert sw._preview_frame_idx == 2
+    assert sw._anim_timer.interval() == 4 * 20
+    sw._on_toggle_play_preview()
+
+    # RoomEditorView animate timer ticks according to per-frame effective durations
+    rev = RoomEditorView(renderer)
+    rev.set_context(proj, UndoStack())
+    rev.set_current_room(1)
+    rev._chk_animate.setChecked(True)
+    assert rev._anim_frames[1] == 0
+    assert rev._anim_counters[1] == 15
+    for _ in range(14):
+        rev._on_anim_tick()
+    assert rev._anim_frames[1] == 0
+    assert rev._anim_counters[1] == 1
+    rev._on_anim_tick()  # tick 15 -> switches to frame 1 (duration 8)
+    assert rev._anim_frames[1] == 1
+    assert rev._anim_counters[1] == 8
+    rev._chk_animate.setChecked(False)
+
+    ov.close()
+    rev.close()
+    ov.deleteLater()
+    rev.deleteLater()
+    qapp.processEvents()
+
+
+def test_frame_groups_model_commands_validation_yaml_and_preview(
+    tmp_path: Path, qapp: QApplication
+) -> None:
+    """Test frame group model, commands, frame ops, validation, YAML, preview, and UI."""
+    png_path = _make_tile_png(
+        tmp_path / "groups.png",
+        8,
+        1,
+        lambda tx, _ty: bytes([0x11 * (tx + 1)] * 8),
+    )
+    img = load_png(png_path)
+    grp = ObjectGroup(name="g", image_path="groups.png", image=img, image_status="ok")
+    frames5 = [StampRegion(i, 0, 1, 1) for i in range(5)]
+
+    # 1. Example playback sequence: frames 0..4, group {1..3} repeat 3 -> 0, 1,2,3 x3, 4, 0, 1...
+    def _trace_frames(o: GameObject, steps: int) -> list[int]:
+        f = 0
+        p = o.initial_pass_counter()
+        out = [f]
+        for _ in range(steps):
+            f, p = o.step_animation_frame(f, p)
+            out.append(f)
+        return out
+
+    obj_ex = GameObject(
+        id=1,
+        name="ex",
+        group="g",
+        frames=frames5,
+        animation_speed=2,
+        groups=[FrameGroup(1, 3, 3)],
+    )
+    assert _trace_frames(obj_ex, 13) == [0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 4, 0, 1, 2]
+    assert obj_ex.total_loop_ticks() == (1 + 3 * 3 + 1) * 2
+
+    # Group at start {0..2} x2, group at end {2..4} x2, group covering all {0..4} x3, two groups, repeat 1 & 255
+    obj_start = GameObject(id=1, name="gs", group="g", frames=frames5, animation_speed=1, groups=[FrameGroup(0, 2, 2)])
+    assert _trace_frames(obj_start, 9) == [0, 1, 2, 0, 1, 2, 3, 4, 0, 1]
+
+    obj_end = GameObject(id=1, name="ge", group="g", frames=frames5, animation_speed=1, groups=[FrameGroup(2, 4, 2)])
+    assert _trace_frames(obj_end, 9) == [0, 1, 2, 3, 4, 2, 3, 4, 0, 1]
+
+    obj_all = GameObject(id=1, name="ga", group="g", frames=frames5[:3], animation_speed=1, groups=[FrameGroup(0, 2, 3)])
+    assert _trace_frames(obj_all, 8) == [0, 1, 2, 0, 1, 2, 0, 1, 2]
+
+    obj_two = GameObject(
+        id=1,
+        name="gtwo",
+        group="g",
+        frames=[StampRegion(i, 0, 1, 1) for i in range(6)],
+        animation_speed=1,
+        groups=[FrameGroup(0, 1, 2), FrameGroup(3, 4, 3)],
+    )
+    assert _trace_frames(obj_two, 13) == [0, 1, 0, 1, 2, 3, 4, 3, 4, 3, 4, 5, 0, 1]
+
+    obj_r1 = GameObject(id=1, name="r1", group="g", frames=frames5[:4], animation_speed=1, groups=[FrameGroup(1, 2, 1)])
+    assert _trace_frames(obj_r1, 5) == [0, 1, 2, 3, 0, 1]
+
+    obj_r255 = GameObject(
+        id=1, name="r255", group="g", frames=frames5[:4], animation_speed=1, groups=[FrameGroup(1, 2, 255)]
+    )
+    seq255 = _trace_frames(obj_r255, 1 + 255 * 2 + 1)
+    assert seq255[0] == 0
+    assert seq255[1 : 1 + 255 * 2] == [1, 2] * 255
+    assert seq255[-2:] == [3, 0]
+
+    # Interaction with per-frame durations
+    obj_dur = GameObject(
+        id=1,
+        name="gdur",
+        group="g",
+        frames=[
+            StampRegion(0, 0, 1, 1, duration=2),
+            StampRegion(1, 0, 1, 1, duration=3),
+            StampRegion(2, 0, 1, 1),
+            StampRegion(3, 0, 1, 1, duration=4),
+        ],
+        animation_speed=5,
+        groups=[FrameGroup(1, 2, 2)],
+    )
+    assert obj_dur.total_loop_ticks() == 2 + 2 * (3 + 5) + 4
+
+    # 2. Commands: Create, Repeat, Ungroup, Add/Remove/Reorder/MoveGroup with Undo/Redo
+    room = Room(id=1, name="R1", pos=(0, 0), row_groups=["g"] * ROOM_HEIGHT, instances=[ObjectInstance(1, 0, 0)])
+    work = GameObject(
+        id=1,
+        name="work",
+        group="g",
+        frames=[StampRegion(i, 0, 1, 1, duration=10 + i) for i in range(5)],
+        animation_speed=4,
+    )
+    proj = Project(object_groups=[grp], objects=[work], rooms=[room], start=StartPosition(1, 0, 0))
+    proj.rebuild_glyph_tables()
+    stack = UndoStack()
+
+    with pytest.raises(ValueError):
+        AddFrameGroupCommand(proj, work, 1, 1, 2)  # < 2 frames
+    with pytest.raises(ValueError):
+        AddFrameGroupCommand(proj, work, 1, 3, 0)  # repeat < 1
+    with pytest.raises(ValueError):
+        AddFrameGroupCommand(proj, work, 1, 3, 256)  # repeat > 255
+
+    stack.push_and_execute(AddFrameGroupCommand(proj, work, 1, 3, 3))
+    assert work.groups == [FrameGroup(1, 3, 3)]
+    with pytest.raises(ValueError):
+        AddFrameGroupCommand(proj, work, 2, 4, 2)  # overlaps
+
+    stack.push_and_execute(SetFrameGroupRepeatCommand(proj, work, 0, 5))
+    assert work.groups == [FrameGroup(1, 3, 5)]
+
+    # Add frame appends outside any group
+    stack.push_and_execute(AddObjectFrameCommand(proj, work, StampRegion(5, 0, 1, 1)))
+    assert len(work.frames) == 6 and work.groups == [FrameGroup(1, 3, 5)]
+
+    # Move group left as a unit (past ungrouped 0 -> group becomes 0..2, frame 0 is now at 3)
+    stack.push_and_execute(MoveFrameGroupCommand(proj, work, 0, -1))
+    assert work.groups == [FrameGroup(0, 2, 5)]
+    assert [f.x for f in work.frames] == [1, 2, 3, 0, 4, 5]
+    assert [f.duration for f in work.frames] == [11, 12, 13, 10, 14, 0]
+    stack.undo()
+    assert work.groups == [FrameGroup(1, 3, 5)]
+
+    # Reorder: move outside frame 0 into middle of group {1..3} -> joins group {0..3}
+    stack.push_and_execute(ReorderObjectFrameCommand(proj, work, 0, 2))
+    assert work.groups == [FrameGroup(0, 3, 5)]
+    assert [f.x for f in work.frames] == [1, 2, 0, 3, 4, 5]
+
+    # Reorder: move frame 1 out of {0..3} to end (5) -> leaves group, group shrinks to {0..2}
+    stack.push_and_execute(ReorderObjectFrameCommand(proj, work, 1, 5))
+    assert work.groups == [FrameGroup(0, 2, 5)]
+
+    # Remove inside group shrinks (0..2 -> 0..1) and another remove dissolves (< 2 frames)
+    stack.push_and_execute(RemoveObjectFrameCommand(proj, work, 1))
+    assert work.groups == [FrameGroup(0, 1, 5)]
+    stack.push_and_execute(RemoveObjectFrameCommand(proj, work, 0))
+    assert work.groups == []
+    stack.undo()
+    assert work.groups == [FrameGroup(0, 1, 5)]
+
+    # Pure helper check: swap two adjacent groups intact
+    two_obj = GameObject(
+        id=1, name="t", group="g", frames=[StampRegion(i, 0, 1, 1) for i in range(5)],
+        animation_speed=2, groups=[FrameGroup(0, 1, 2), FrameGroup(2, 4, 3)]
+    )
+    mv_cmd = MoveFrameGroupCommand(proj, two_obj, 0, 1)
+    mv_cmd.execute()
+    assert two_obj.groups == [FrameGroup(0, 2, 3), FrameGroup(3, 4, 2)]
+    assert [f.x for f in two_obj.frames] == [2, 3, 4, 0, 1]
+    mv_cmd.undo()
+    assert two_obj.groups == [FrameGroup(0, 1, 2), FrameGroup(2, 4, 3)]
+
+    # 3. Validation errors & warnings
+    def _val_codes(o: GameObject) -> set[str]:
+        p = Project(object_groups=[grp], objects=[o], rooms=[room], start=StartPosition(1, 0, 0))
+        p.rebuild_glyph_tables()
+        return {i.code for i in validate_project(p)}
+
+    assert "OBJECT_INVALID_GROUP_REPEAT" in _val_codes(
+        GameObject(id=1, name="e1", group="g", frames=frames5[:4], animation_speed=2, groups=[FrameGroup(0, 1, 0)])
+    )
+    assert "OBJECT_GROUP_TOO_SHORT" in _val_codes(
+        GameObject(id=1, name="e2", group="g", frames=frames5[:4], animation_speed=2, groups=[FrameGroup(1, 1, 2)])
+    )
+    assert "OBJECT_GROUP_OUT_OF_BOUNDS" in _val_codes(
+        GameObject(id=1, name="e3", group="g", frames=frames5[:4], animation_speed=2, groups=[FrameGroup(2, 4, 2)])
+    )
+    assert "OBJECT_OVERLAPPING_GROUPS" in _val_codes(
+        GameObject(id=1, name="e4", group="g", frames=frames5[:4], animation_speed=2, groups=[FrameGroup(0, 2, 2), FrameGroup(2, 3, 2)])
+    )
+    assert "ANIM_GROUP_REPEAT_ONE" in _val_codes(
+        GameObject(id=1, name="w1", group="g", frames=frames5[:4], animation_speed=2, groups=[FrameGroup(0, 1, 1)])
+    )
+    assert "ANIM_GROUPS_NOT_ANIMATED" in _val_codes(
+        GameObject(id=1, name="w2", group="g", frames=frames5[:4], animation_speed=0, groups=[FrameGroup(0, 1, 2)])
+    )
+
+    # 4. YAML round-trip with & without groups
+    proj_no_grp = Project(
+        object_groups=[grp],
+        objects=[GameObject(id=1, name="plain", group="g", frames=frames5[:2], animation_speed=3)],
+        rooms=[room],
+        start=StartPosition(1, 0, 0),
+    )
+    txt_no_grp = serialize_project_to_yaml(proj_no_grp)
+    assert "\n  groups:" not in txt_no_grp
+    assert "groups" not in yaml.safe_load(txt_no_grp)["objects"][0]
+
+    proj_grp = Project(object_groups=[grp], objects=[obj_ex], rooms=[room], start=StartPosition(1, 0, 0))
+    yg = tmp_path / "with_grp.yaml"
+    save_project(proj_grp, yg)
+    txt1 = yg.read_text(encoding="utf-8")
+    assert "groups:" in txt1 and "{first: 1, last: 3, repeat: 3}" in txt1
+    loaded_g = load_project(yg)
+    assert loaded_g.project.objects[0].groups == [FrameGroup(1, 3, 3)]
+    assert serialize_project_to_yaml(loaded_g.project) == txt1
+    with pytest.raises(ProjectIOError):
+        deserialize_project_from_yaml(txt1.replace("repeat: 3", "repeat: 0"), base_dir=tmp_path)
+
+    # 5. Offscreen UI (StampImageWidget + ObjectsView + RoomEditorView)
+    pal_table = load_default_pal_palette()
+    renderer = QtRenderer(pal_table)
+    # Use clean project starting at plain object -> multi-select -> Group frames
+    ui_obj = GameObject(
+        id=1,
+        name="ui",
+        group="g",
+        frames=[StampRegion(i, 0, 1, 1, duration=(2 if i == 1 else 0)) for i in range(5)],
+        animation_speed=1,
+    )
+    proj_ui = Project(object_groups=[grp], objects=[ui_obj], rooms=[room], start=StartPosition(1, 0, 0))
+    proj_ui.rebuild_glyph_tables()
+    ov = ObjectsView(renderer, pal_table)
+    ov.set_context(proj_ui, UndoStack())
+    sw = ov._stamp_widget
+    sw.select_frame_range(1, 3)
+    assert sw._btn_group_frames.isEnabled()
+    sw._spin_group_repeat.setValue(3)
+    sw._on_group_frames_clicked()
+    assert ui_obj.groups == [FrameGroup(1, 3, 3)]
+    assert "[F1 (2t)" in sw._frame_list.item(1).text()
+    assert "F3]×3" in sw._frame_list.item(3).text()
+    assert "Loop: 14 ticks" in sw._lbl_loop_total.text()  # f0(1)+3*(f1(2)+f2(1)+f3(1))+f4(1)=14
+
+    # Stamp preview playback follows 0, 1,2,3 x3, 4, 0
+    sw._on_toggle_play_preview()
+    seen_stamp = [sw._preview_frame_idx]
+    for _ in range(11):
+        sw._on_anim_timer_tick()
+        seen_stamp.append(sw._preview_frame_idx)
+    assert seen_stamp == [0, 1, 2, 3, 1, 2, 3, 1, 2, 3, 4, 0]
+    sw._on_toggle_play_preview()
+
+    # Select Group + Ungroup button
+    sw.set_selected_frame_index(2)
+    sw._on_select_group_clicked()
+    assert sw._selected_frame_rows() == [1, 2, 3]
+    sw._on_ungroup_clicked()
+    assert ui_obj.groups == []
+
+    # RoomEditorView plays grouped + duration sequence identically
+    ov._undo_stack.undo()  # restore group {1..3} x3
+    rev = RoomEditorView(renderer)
+    rev.set_context(proj_ui, UndoStack())
+    rev.set_current_room(1)
+    rev._chk_animate.setChecked(True)
+    ticks_seen = [rev._anim_frames[1]]
+    for _ in range(13):  # cycle = 14 ticks (tick 0=f0, 1=f1,1=f1(dur2), 2,3, 1,1,2,3, 1,1,2,3, 4)
+        rev._on_anim_tick()
+        ticks_seen.append(rev._anim_frames[1])
+    assert ticks_seen == [0, 1, 1, 2, 3, 1, 1, 2, 3, 1, 1, 2, 3, 4]
+    rev._chk_animate.setChecked(False)
+
+    ov.close()
+    rev.close()
     ov.deleteLater()
     rev.deleteLater()
     qapp.processEvents()

@@ -23,7 +23,10 @@ from room_editor.model.compression import (
 from room_editor.model.glyphs import (
     DEFAULT_PIXEL_MAPPING,
     MAX_ANIMATION_SPEED,
+    MAX_FRAME_DURATION,
+    MAX_GROUP_REPEAT,
     MAX_OBJECT_FRAMES,
+    FrameGroup,
     StampRegion,
     is_valid_pixel_mapping,
 )
@@ -169,21 +172,22 @@ def _project_to_yaml_dict(project: Project) -> dict[str, Any]:
     objects_list = []
     for obj in project.objects:
         frames_val = _FlowList([_FlowMap(f.to_dict()) for f in obj.frames])
-        objects_list.append(
-            _FlowMap(
-                {
-                    "id": obj.id,
-                    "name": obj.name,
-                    "group": obj.group,
-                    "tags": _FlowList(list(obj.tags)),
-                    "non-blockable": bool(obj.non_blockable),
-                    "pickable": bool(obj.pickable),
-                    "colpf3": bool(obj.colpf3),
-                    "animation_speed": int(obj.animation_speed),
-                    "frames": frames_val,
-                }
+        obj_dict: dict[str, Any] = {
+            "id": obj.id,
+            "name": obj.name,
+            "group": obj.group,
+            "tags": _FlowList(list(obj.tags)),
+            "non-blockable": bool(obj.non_blockable),
+            "pickable": bool(obj.pickable),
+            "colpf3": bool(obj.colpf3),
+            "animation_speed": int(obj.animation_speed),
+            "frames": frames_val,
+        }
+        if obj.groups:
+            obj_dict["groups"] = _FlowList(
+                [_FlowMap(g.to_dict()) for g in sorted(obj.groups, key=lambda gr: gr.first)]
             )
-        )
+        objects_list.append(_FlowMap(obj_dict))
 
     rooms_list = []
     for room in project.rooms:
@@ -483,12 +487,20 @@ def deserialize_project_from_yaml(
                 raise ProjectIOError(
                     f"Object {oid} frames[{f_idx}] must be a mapping."
                 )
+            fdur = _parse_int(
+                freg_raw.get("duration", 0), f"objects[].frames[{f_idx}].duration"
+            )
+            if not (0 <= fdur <= MAX_FRAME_DURATION):
+                raise ProjectIOError(
+                    f"Object {oid} frames[{f_idx}].duration ({fdur}) must be in 0..{MAX_FRAME_DURATION}."
+                )
             frames.append(
                 StampRegion(
                     x=_parse_int(freg_raw.get("x", 0), f"objects[].frames[{f_idx}].x"),
                     y=_parse_int(freg_raw.get("y", 0), f"objects[].frames[{f_idx}].y"),
                     w=_parse_int(freg_raw.get("w", 1), f"objects[].frames[{f_idx}].w"),
                     h=_parse_int(freg_raw.get("h", 1), f"objects[].frames[{f_idx}].h"),
+                    duration=fdur,
                 )
             )
         anim_speed = _parse_int(
@@ -498,6 +510,40 @@ def deserialize_project_from_yaml(
             raise ProjectIOError(
                 f"Object {oid} animation_speed ({anim_speed}) must be in 0..{MAX_ANIMATION_SPEED}."
             )
+        parsed_groups: list[FrameGroup] = []
+        raw_groups = obj_raw.get("groups")
+        if raw_groups is not None:
+            if not isinstance(raw_groups, list):
+                raise ProjectIOError(f"Object {oid} 'groups' must be a list.")
+            for g_idx, g_raw in enumerate(raw_groups):
+                if not isinstance(g_raw, dict):
+                    raise ProjectIOError(
+                        f"Object {oid} groups[{g_idx}] must be a mapping."
+                    )
+                g_first = _parse_int(g_raw.get("first"), f"objects[].groups[{g_idx}].first")
+                g_last = _parse_int(g_raw.get("last"), f"objects[].groups[{g_idx}].last")
+                g_rep = _parse_int(
+                    g_raw.get("repeat", 1), f"objects[].groups[{g_idx}].repeat"
+                )
+                if not (1 <= g_rep <= MAX_GROUP_REPEAT):
+                    raise ProjectIOError(
+                        f"Object {oid} groups[{g_idx}].repeat ({g_rep}) must be in 1..{MAX_GROUP_REPEAT}."
+                    )
+                if g_first < 0 or g_last < 0 or g_first >= len(frames) or g_last >= len(frames):
+                    raise ProjectIOError(
+                        f"Object {oid} groups[{g_idx}] ({g_first}..{g_last}) out of bounds for {len(frames)} frame(s)."
+                    )
+                if g_last - g_first + 1 < 2:
+                    raise ProjectIOError(
+                        f"Object {oid} groups[{g_idx}] ({g_first}..{g_last}) must have at least 2 frames."
+                    )
+                parsed_groups.append(FrameGroup(first=g_first, last=g_last, repeat=g_rep))
+            parsed_groups.sort(key=lambda gr: gr.first)
+            for pg, cg in zip(parsed_groups, parsed_groups[1:]):
+                if pg.last >= cg.first:
+                    raise ProjectIOError(
+                        f"Object {oid} has overlapping frame groups ({pg.first}..{pg.last}) and ({cg.first}..{cg.last})."
+                    )
         objects.append(
             GameObject(
                 id=oid,
@@ -509,6 +555,7 @@ def deserialize_project_from_yaml(
                 colpf3=bool(obj_raw.get("colpf3", False)),
                 frames=frames,
                 animation_speed=anim_speed,
+                groups=parsed_groups,
             )
         )
 

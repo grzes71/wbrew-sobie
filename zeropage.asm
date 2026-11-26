@@ -64,7 +64,7 @@ zp_intro_sfx_timer  = $D7   ; Licznik czasu zanikania kliku POKEY (0..2 klatki)
 zp_intro_done       = $D8   ; Flaga zakończenia pisania tekstu (0=pisze, 1=cały tekst)
 zp_intro_wait_rel   = $D9   ; Flaga oczekiwania na puszczenie FIRE po pominięciu intro (0/1)
 
-; --- Room Animation Engine ($E0-$F7, VBI-safe) ---
+; --- Room Animation Engine ($E0-$FD, VBI-safe) ---
 zp_anim_active      = $E0   ; Non-zero while current room has active animated objects
 zp_anim_pending     = $E1   ; Non-zero while any object awaits VBI charset copy
 zp_anim_budget      = $E2   ; Remaining 8-byte glyph slot budget for current VBI
@@ -73,7 +73,7 @@ zp_anim_rem         = $E4   ; Remaining active-room objects to inspect in copy p
 zp_anim_cursor      = $E5   ; Round-robin start index for copy budget fairness
 zp_anim_id          = $E6   ; Current 0-based anim_idx (0..ANIM_COUNT-1)
 zp_anim_chbase      = $E7   ; Cached >charset_<group> page byte for active object
-zp_anim_flags       = $E8   ; Cached anim_flags byte (bit7=Form2, bits6..0=pool bank)
+zp_anim_flags       = $E8   ; Cached anim_flags byte (bit7=Form2, bit6=VarDur, bit5=Groups, bits4..0=bank)
 zp_anim_slots       = $E9   ; Cached dedicated slot count S (1..127)
 zp_anim_pos         = $EA   ; Deferred slot (Form 1) or delta pair (Form 2) cursor
 zp_anim_sbase       = $EB   ; Base offset in anim_slot_cur for current Form 1 object
@@ -82,10 +82,13 @@ zp_anim_hi          = $ED   ; Scratch byte (slot*8 hi / delta count)
 zp_anim_src         = $EE   ; Frame/init sequence table pointer (2 bytes: $EE-$EF)
 zp_anim_dst         = $F0   ; Dedicated charset destination pointer (2 bytes: $F0-$F1)
 zp_anim_scodes      = $F2   ; Dedicated base char code list pointer (2 bytes: $F2-$F3)
-zp_anim_ptr         = $F4   ; Room list / Form 2 delta block pointer (2 bytes: $F4-$F5)
+zp_anim_ptr         = $F4   ; Room list / Form 2 delta block / dur / group pointer (2 bytes: $F4-$F5)
 zp_anim_psrc        = $F6   ; Split-pool plane pointer when ANIM_POOL_COUNT > 1 ($F6-$F7)
 zp_anim_pat         = $F8   ; Pattern index scratch for split-pool copy ($F8)
 zp_anim_row         = $F9   ; Row index scratch for split-pool copy ($F9)
 zp_anim_dcnt        = $FA   ; Form 2 delta pair count ($FA, never clobbered by dst math)
+zp_anim_f2str       = $FB   ; Form 2 delta pointer table stride (F or F+G) ($FB)
+zp_anim_nvis        = $FC   ; Form 2 next visible frame committed on delta completion ($FC)
+zp_anim_nvrep       = $FD   ; Form 2 next visible pass counter committed on delta completion ($FD)
 
 

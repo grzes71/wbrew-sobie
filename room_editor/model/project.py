@@ -13,7 +13,9 @@ from room_editor.model.glyphs import (
     GLYPH_WIDTH,
     MAX_ANIMATION_SPEED,
     MAX_GLYPHS_PER_GROUP,
+    MAX_GROUP_REPEAT,
     MAX_OBJECT_FRAMES,
+    FrameGroup,
     GlyphBudgetCheck,
     GlyphEntry,
     GlyphTable,
@@ -133,6 +135,7 @@ class GameObject:
     colpf3: bool = False
     frames: list[StampRegion] = field(default_factory=lambda: [StampRegion(0, 0, 1, 1)])
     animation_speed: int = 0
+    groups: list[FrameGroup] = field(default_factory=list)
     chars: list[list[int]] = field(default_factory=list, repr=False, compare=False)
     dedicated_slots: list[tuple[int, tuple[tuple[int, int], ...]]] = field(
         default_factory=list, repr=False, compare=False
@@ -151,6 +154,7 @@ class GameObject:
         colpf3: bool = False,
         frames: Sequence[StampRegion | dict[str, Any]] | None = None,
         animation_speed: int = 0,
+        groups: Sequence[FrameGroup | dict[str, Any]] | None = None,
         *,
         region: StampRegion | dict[str, Any] | None = None,
         chars: list[list[int]] | None = None,
@@ -173,6 +177,13 @@ class GameObject:
         else:
             self.frames = [StampRegion(0, 0, 1, 1)]
         self.animation_speed = int(animation_speed)
+        if groups is not None:
+            self.groups = sorted(
+                (g if isinstance(g, FrameGroup) else FrameGroup.from_dict(g) for g in groups),
+                key=lambda gr: (gr.first, gr.last),
+            )
+        else:
+            self.groups = []
         if chars is not None:
             self.chars = [list(r) for r in chars]
         elif self.w > 0 and self.h > 0:
@@ -206,6 +217,65 @@ class GameObject:
         """Return True iff object has at least 2 frames AND animation_speed > 0."""
         return len(self.frames) >= 2 and self.animation_speed > 0
 
+    def effective_frame_duration(self, frame_index: int) -> int:
+        """Return effective PAL VBLANK ticks for `frame_index` (override > 0 else animation_speed)."""
+        f = self.frames[frame_index]
+        return f.duration if f.duration > 0 else self.animation_speed
+
+    def effective_frame_durations(self) -> list[int]:
+        """Return resolved effective PAL VBLANK tick duration for each frame."""
+        return [self.effective_frame_duration(i) for i in range(len(self.frames))]
+
+    def total_loop_ticks(self) -> int:
+        """Return total ticks across one full animation cycle including group passes (0 when speed == 0)."""
+        if self.animation_speed <= 0:
+            return 0
+        total = 0
+        for idx in range(len(self.frames)):
+            grp = self.group_for_frame(idx)
+            mult = grp.repeat if grp is not None else 1
+            total += self.effective_frame_duration(idx) * mult
+        return total
+
+    def group_for_frame(self, frame_index: int) -> FrameGroup | None:
+        """Return the FrameGroup containing `frame_index`, or None."""
+        for g in self.groups:
+            if g.contains(frame_index):
+                return g
+        return None
+
+    def group_starting_at(self, frame_index: int) -> FrameGroup | None:
+        """Return the FrameGroup whose first frame is `frame_index`, or None."""
+        for g in self.groups:
+            if g.first == frame_index:
+                return g
+        return None
+
+    def group_ending_at(self, frame_index: int) -> FrameGroup | None:
+        """Return the FrameGroup whose last frame is `frame_index`, or None."""
+        for g in self.groups:
+            if g.last == frame_index:
+                return g
+        return None
+
+    def initial_pass_counter(self) -> int:
+        """Initial pass counter at frame 0 (group repeat if frame 0 starts a group, else 0)."""
+        g0 = self.group_starting_at(0)
+        return g0.repeat if g0 is not None else 0
+
+    def step_animation_frame(self, current_frame: int, pass_counter: int) -> tuple[int, int]:
+        """Advance `(current_frame, pass_counter)` by one transition using flat group repeat rules."""
+        nframes = len(self.frames)
+        if nframes <= 1 or self.animation_speed <= 0:
+            return (0, 0)
+        end_grp = self.group_ending_at(current_frame)
+        if end_grp is not None and pass_counter > 1:
+            return (end_grp.first, pass_counter - 1)
+        next_frame = (current_frame + 1) % nframes
+        start_grp = self.group_starting_at(next_frame)
+        next_pass = start_grp.repeat if start_grp is not None else (0 if end_grp is not None else pass_counter)
+        return (next_frame, next_pass)
+
     @property
     def w(self) -> int:
         """Stamp width in character cells (4 pixels each)."""
@@ -230,6 +300,50 @@ class GameObject:
                 if row[dx] != 0:
                     offsets.append((dx, dy))
         return offsets
+
+
+def adjust_groups_on_remove(
+    groups: Sequence[FrameGroup], removed_index: int
+) -> list[FrameGroup]:
+    """Adjust flat frame groups after removing frame `removed_index` (dissolving groups < 2 frames)."""
+    updated: list[FrameGroup] = []
+    for g in sorted(groups, key=lambda gr: (gr.first, gr.last)):
+        if removed_index < g.first:
+            updated.append(FrameGroup(g.first - 1, g.last - 1, g.repeat))
+        elif removed_index <= g.last:
+            new_last = g.last - 1
+            if new_last - g.first + 1 >= 2:
+                updated.append(FrameGroup(g.first, new_last, g.repeat))
+        else:
+            updated.append(g)
+    return updated
+
+
+def adjust_groups_on_reorder(
+    groups: Sequence[FrameGroup], from_index: int, to_index: int
+) -> list[FrameGroup]:
+    """Adjust flat frame groups when moving frame `from_index` to `to_index`.
+
+    - Moving inside the same group preserves its bounds.
+    - Moving a frame out of a group's range removes it from that group (dissolving if < 2).
+    - Moving an outside frame strictly into the middle of a group (`first < to <= last`) adds it.
+    """
+    ordered = sorted(groups, key=lambda gr: (gr.first, gr.last))
+    if from_index == to_index:
+        return list(ordered)
+    for g in ordered:
+        if g.contains(from_index) and g.contains(to_index):
+            return list(ordered)
+    after_remove = adjust_groups_on_remove(ordered, from_index)
+    result: list[FrameGroup] = []
+    for h in after_remove:
+        if to_index <= h.first:
+            result.append(FrameGroup(h.first + 1, h.last + 1, h.repeat))
+        elif h.first < to_index <= h.last:
+            result.append(FrameGroup(h.first, h.last + 1, h.repeat))
+        else:
+            result.append(h)
+    return result
 
 
 @dataclass

@@ -9,7 +9,10 @@ from typing import Literal
 
 from room_editor.model.glyphs import (
     MAX_ANIMATION_SPEED,
+    MAX_FRAME_DURATION,
+    MAX_GROUP_REPEAT,
     MAX_OBJECT_FRAMES,
+    FrameGroup,
     IndexedImage,
     StampRegion,
 )
@@ -25,6 +28,8 @@ from room_editor.model.project import (
     StartPosition,
     Teleport,
     TeleportEndpoint,
+    adjust_groups_on_remove,
+    adjust_groups_on_reorder,
 )
 
 
@@ -812,7 +817,15 @@ class UpdateObjectCommand(Command):
         if frames is not None:
             new_frames = list(frames)
         elif region is not None:
-            new_frames = [region] + list(obj.frames[1:])
+            old_dur = obj.frames[0].duration if obj.frames else 0
+            f0 = StampRegion(
+                region.x,
+                region.y,
+                region.w,
+                region.h,
+                duration=old_dur if region.duration == 0 else region.duration,
+            )
+            new_frames = [f0] + list(obj.frames[1:])
         else:
             new_frames = list(obj.frames)
         self._old_state = (
@@ -881,7 +894,8 @@ class AddObjectFrameCommand(Command):
             raise ValueError(
                 f"Frame size {region.w}x{region.h} does not match object size {obj.w}x{obj.h}."
             )
-        self._new_frames = list(obj.frames) + [region]
+        new_frame = StampRegion(region.x, region.y, region.w, region.h, duration=0)
+        self._new_frames = list(obj.frames) + [new_frame]
 
     def execute(self) -> None:
         self._obj.frames = list(self._new_frames)
@@ -907,13 +921,17 @@ class RemoveObjectFrameCommand(Command):
         self._new_frames = [
             f for idx, f in enumerate(obj.frames) if idx != frame_index
         ]
+        self._old_groups = list(obj.groups)
+        self._new_groups = adjust_groups_on_remove(obj.groups, frame_index)
 
     def execute(self) -> None:
         self._obj.frames = list(self._new_frames)
+        self._obj.groups = list(self._new_groups)
         self._project.rebuild_glyph_tables()
 
     def undo(self) -> None:
         self._obj.frames = list(self._old_frames)
+        self._obj.groups = list(self._old_groups)
         self._project.rebuild_glyph_tables()
 
 
@@ -937,13 +955,17 @@ class ReorderObjectFrameCommand(Command):
         item = reordered.pop(from_index)
         reordered.insert(to_index, item)
         self._new_frames = reordered
+        self._old_groups = list(obj.groups)
+        self._new_groups = adjust_groups_on_reorder(obj.groups, from_index, to_index)
 
     def execute(self) -> None:
         self._obj.frames = list(self._new_frames)
+        self._obj.groups = list(self._new_groups)
         self._project.rebuild_glyph_tables()
 
     def undo(self) -> None:
         self._obj.frames = list(self._old_frames)
+        self._obj.groups = list(self._old_groups)
         self._project.rebuild_glyph_tables()
 
 
@@ -968,7 +990,10 @@ class ReplaceObjectFrameCommand(Command):
             )
         self._old_frames = list(obj.frames)
         updated = list(obj.frames)
-        updated[frame_index] = new_region
+        old_dur = obj.frames[frame_index].duration
+        updated[frame_index] = StampRegion(
+            new_region.x, new_region.y, new_region.w, new_region.h, duration=old_dur
+        )
         self._new_frames = updated
 
     def execute(self) -> None:
@@ -977,6 +1002,206 @@ class ReplaceObjectFrameCommand(Command):
 
     def undo(self) -> None:
         self._obj.frames = list(self._old_frames)
+        self._project.rebuild_glyph_tables()
+
+
+class SetObjectFrameDurationCommand(Command):
+    """Set the per-frame PAL duration (0..255 ticks) on one frame of a GameObject."""
+
+    def __init__(
+        self,
+        project: Project,
+        obj: GameObject,
+        frame_index: int,
+        duration: int,
+    ) -> None:
+        if not (0 <= frame_index < len(obj.frames)):
+            raise ValueError(f"Frame index out of range: {frame_index}.")
+        if isinstance(duration, bool) or not isinstance(duration, int):
+            raise ValueError(
+                f"Frame duration must be an integer 0..{MAX_FRAME_DURATION}; got {duration!r}."
+            )
+        dur_int = int(duration)
+        if not (0 <= dur_int <= MAX_FRAME_DURATION):
+            raise ValueError(f"Frame duration {dur_int} out of range 0..{MAX_FRAME_DURATION}.")
+        self.description = f"Set frame {frame_index} duration of '{obj.name}'"
+        self._project = project
+        self._obj = obj
+        self._old_frames = list(obj.frames)
+        updated = list(obj.frames)
+        f = updated[frame_index]
+        updated[frame_index] = StampRegion(f.x, f.y, f.w, f.h, duration=dur_int)
+        self._new_frames = updated
+
+    def execute(self) -> None:
+        self._obj.frames = list(self._new_frames)
+
+    def undo(self) -> None:
+        self._obj.frames = list(self._old_frames)
+
+
+class AddFrameGroupCommand(Command):
+    """Add a flat contiguous frame group `[first..last]` with `repeat` (1..255)."""
+
+    def __init__(
+        self,
+        project: Project,
+        obj: GameObject,
+        first: int,
+        last: int,
+        repeat: int = 1,
+    ) -> None:
+        if any(isinstance(v, bool) or not isinstance(v, int) for v in (first, last, repeat)):
+            raise ValueError("Frame group bounds and repeat must be integers.")
+        if first < 0 or last >= len(obj.frames) or last - first + 1 < 2:
+            raise ValueError(
+                f"Invalid frame group range ({first}..{last}) for {len(obj.frames)} frame(s)."
+            )
+        if not (1 <= repeat <= MAX_GROUP_REPEAT):
+            raise ValueError(f"Group repeat {repeat} out of range 1..{MAX_GROUP_REPEAT}.")
+        for existing in obj.groups:
+            if not (last < existing.first or first > existing.last):
+                raise ValueError(
+                    f"Frame group ({first}..{last}) overlaps existing group ({existing.first}..{existing.last})."
+                )
+        self.description = f"Group frames {first}..{last} of '{obj.name}'"
+        self._project = project
+        self._obj = obj
+        self._old_groups = list(obj.groups)
+        self._new_groups = sorted(
+            list(obj.groups) + [FrameGroup(first, last, repeat)],
+            key=lambda gr: (gr.first, gr.last),
+        )
+
+    def execute(self) -> None:
+        self._obj.groups = list(self._new_groups)
+
+    def undo(self) -> None:
+        self._obj.groups = list(self._old_groups)
+
+
+class RemoveFrameGroupCommand(Command):
+    """Remove frame group at `group_index` without modifying frames."""
+
+    def __init__(self, project: Project, obj: GameObject, group_index: int) -> None:
+        if not (0 <= group_index < len(obj.groups)):
+            raise ValueError(f"Frame group index out of range: {group_index}.")
+        self.description = f"Ungroup frames of '{obj.name}'"
+        self._project = project
+        self._obj = obj
+        self._old_groups = list(obj.groups)
+        self._new_groups = [g for idx, g in enumerate(obj.groups) if idx != group_index]
+
+    def execute(self) -> None:
+        self._obj.groups = list(self._new_groups)
+
+    def undo(self) -> None:
+        self._obj.groups = list(self._old_groups)
+
+
+class SetFrameGroupRepeatCommand(Command):
+    """Update loop repeat (1..255) on frame group `group_index`."""
+
+    def __init__(
+        self, project: Project, obj: GameObject, group_index: int, repeat: int
+    ) -> None:
+        if not (0 <= group_index < len(obj.groups)):
+            raise ValueError(f"Frame group index out of range: {group_index}.")
+        if isinstance(repeat, bool) or not isinstance(repeat, int):
+            raise ValueError(f"Group repeat must be integer 1..{MAX_GROUP_REPEAT}; got {repeat!r}.")
+        if not (1 <= repeat <= MAX_GROUP_REPEAT):
+            raise ValueError(f"Group repeat {repeat} out of range 1..{MAX_GROUP_REPEAT}.")
+        self.description = f"Set group repeat on '{obj.name}'"
+        self._project = project
+        self._obj = obj
+        self._old_groups = list(obj.groups)
+        updated = list(obj.groups)
+        g = updated[group_index]
+        updated[group_index] = FrameGroup(g.first, g.last, int(repeat))
+        self._new_groups = updated
+
+    def execute(self) -> None:
+        self._obj.groups = list(self._new_groups)
+
+    def undo(self) -> None:
+        self._obj.groups = list(self._old_groups)
+
+
+class MoveFrameGroupCommand(Command):
+    """Move an entire contiguous frame group `group_index` left (-1) or right (+1) as a unit."""
+
+    def __init__(
+        self, project: Project, obj: GameObject, group_index: int, direction: int
+    ) -> None:
+        if not (0 <= group_index < len(obj.groups)):
+            raise ValueError(f"Frame group index out of range: {group_index}.")
+        if direction not in (-1, 1):
+            raise ValueError(f"Group move direction must be -1 or +1; got {direction!r}.")
+        g = obj.groups[group_index]
+        if direction == -1 and g.first <= 0:
+            raise ValueError("Cannot move frame group before index 0.")
+        if direction == 1 and g.last >= len(obj.frames) - 1:
+            raise ValueError("Cannot move frame group past last frame.")
+
+        self.description = f"Move frame group of '{obj.name}'"
+        self._project = project
+        self._obj = obj
+        self._old_frames = list(obj.frames)
+        self._old_groups = list(obj.groups)
+
+        new_frames = list(obj.frames)
+        new_groups = list(obj.groups)
+
+        if direction == -1:
+            adj = obj.group_ending_at(g.first - 1)
+            if adj is not None:
+                adj_idx = obj.groups.index(adj)
+                span_a = new_frames[adj.first : adj.last + 1]
+                span_b = new_frames[g.first : g.last + 1]
+                new_frames[adj.first : g.last + 1] = span_b + span_a
+                new_g = FrameGroup(adj.first, adj.first + g.frame_count - 1, g.repeat)
+                new_adj = FrameGroup(new_g.last + 1, g.last, adj.repeat)
+                new_groups[group_index] = new_g
+                new_groups[adj_idx] = new_adj
+                self.result_range = (new_g.first, new_g.last)
+            else:
+                u = g.first - 1
+                span = new_frames[g.first : g.last + 1]
+                new_frames[u : g.last + 1] = span + [new_frames[u]]
+                new_g = FrameGroup(g.first - 1, g.last - 1, g.repeat)
+                new_groups[group_index] = new_g
+                self.result_range = (new_g.first, new_g.last)
+        else:
+            adj = obj.group_starting_at(g.last + 1)
+            if adj is not None:
+                adj_idx = obj.groups.index(adj)
+                span_a = new_frames[g.first : g.last + 1]
+                span_b = new_frames[adj.first : adj.last + 1]
+                new_frames[g.first : adj.last + 1] = span_b + span_a
+                new_adj = FrameGroup(g.first, g.first + adj.frame_count - 1, adj.repeat)
+                new_g = FrameGroup(new_adj.last + 1, adj.last, g.repeat)
+                new_groups[group_index] = new_g
+                new_groups[adj_idx] = new_adj
+                self.result_range = (new_g.first, new_g.last)
+            else:
+                u = g.last + 1
+                span = new_frames[g.first : g.last + 1]
+                new_frames[g.first : u + 1] = [new_frames[u]] + span
+                new_g = FrameGroup(g.first + 1, g.last + 1, g.repeat)
+                new_groups[group_index] = new_g
+                self.result_range = (new_g.first, new_g.last)
+
+        self._new_frames = new_frames
+        self._new_groups = sorted(new_groups, key=lambda gr: (gr.first, gr.last))
+
+    def execute(self) -> None:
+        self._obj.frames = list(self._new_frames)
+        self._obj.groups = list(self._new_groups)
+        self._project.rebuild_glyph_tables()
+
+    def undo(self) -> None:
+        self._obj.frames = list(self._old_frames)
+        self._obj.groups = list(self._old_groups)
         self._project.rebuild_glyph_tables()
 
 

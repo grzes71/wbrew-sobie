@@ -33,6 +33,7 @@ from room_editor.io.png import (
     to_relative_posix_path,
 )
 from room_editor.model.commands import (
+    AddFrameGroupCommand,
     AddGroupCommand,
     AddGroupPaletteCommand,
     AddObjectCommand,
@@ -40,11 +41,15 @@ from room_editor.model.commands import (
     DeleteGroupCommand,
     DeleteGroupPaletteCommand,
     DeleteObjectCommand,
+    MoveFrameGroupCommand,
+    RemoveFrameGroupCommand,
     RemoveObjectFrameCommand,
     RenameGroupPaletteCommand,
     ReorderGroupPaletteCommand,
     ReorderObjectFrameCommand,
     ReplaceObjectFrameCommand,
+    SetFrameGroupRepeatCommand,
+    SetObjectFrameDurationCommand,
     UndoStack,
     UpdateGroupCommand,
     UpdateGroupPaletteColorsCommand,
@@ -302,6 +307,11 @@ class ObjectsView(QWidget):
         self._stamp_widget.replace_frame_requested.connect(self._on_replace_frame_from_selection)
         self._stamp_widget.remove_frame_requested.connect(self._on_remove_frame)
         self._stamp_widget.reorder_frame_requested.connect(self._on_reorder_frame)
+        self._stamp_widget.frame_duration_changed.connect(self._on_frame_duration_changed)
+        self._stamp_widget.group_frames_requested.connect(self._on_group_frames)
+        self._stamp_widget.ungroup_frames_requested.connect(self._on_ungroup_frames)
+        self._stamp_widget.group_repeat_changed.connect(self._on_group_repeat_changed)
+        self._stamp_widget.move_group_requested.connect(self._on_move_frame_group)
         self._stamp_widget.selection_changed.connect(self._on_stamp_selection_changed)
         self._stamp_widget.preview_palette_changed.connect(self._on_stamp_preview_palette_changed)
         stamp_layout.addWidget(self._stamp_widget, 1)
@@ -1243,6 +1253,72 @@ class ObjectsView(QWidget):
         self.model_changed.emit()
         self._stamp_widget.set_selected_frame_index(to_idx)
 
+    def _on_frame_duration_changed(self, frame_idx: int, duration: int) -> None:
+        if self._block_signals or self._selected_object_id is None:
+            return
+        obj = self._project.get_object(self._selected_object_id)
+        if obj is None or not (0 <= frame_idx < obj.frame_count):
+            return
+        if obj.frames[frame_idx].duration == duration:
+            return
+        self._undo_stack.push_and_execute(
+            SetObjectFrameDurationCommand(self._project, obj, frame_idx, duration)
+        )
+        self.model_changed.emit()
+        self._stamp_widget.set_selected_frame_index(frame_idx)
+
+    def _on_group_frames(self, first: int, last: int, repeat: int) -> None:
+        if self._selected_object_id is None:
+            return
+        obj = self._project.get_object(self._selected_object_id)
+        if obj is None:
+            return
+        try:
+            cmd = AddFrameGroupCommand(self._project, obj, first, last, repeat)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Cannot Group Frames", str(exc))
+            return
+        self._undo_stack.push_and_execute(cmd)
+        self.model_changed.emit()
+        self._stamp_widget.select_frame_range(first, last)
+
+    def _on_ungroup_frames(self, group_idx: int) -> None:
+        if self._selected_object_id is None:
+            return
+        obj = self._project.get_object(self._selected_object_id)
+        if obj is None or not (0 <= group_idx < len(obj.groups)):
+            return
+        self._undo_stack.push_and_execute(
+            RemoveFrameGroupCommand(self._project, obj, group_idx)
+        )
+        self.model_changed.emit()
+        self._stamp_widget.set_selected_frame_index(self._stamp_widget._selected_frame_idx)
+
+    def _on_group_repeat_changed(self, group_idx: int, repeat: int) -> None:
+        if self._block_signals or self._selected_object_id is None:
+            return
+        obj = self._project.get_object(self._selected_object_id)
+        if obj is None or not (0 <= group_idx < len(obj.groups)):
+            return
+        if obj.groups[group_idx].repeat == repeat:
+            return
+        self._undo_stack.push_and_execute(
+            SetFrameGroupRepeatCommand(self._project, obj, group_idx, repeat)
+        )
+        self.model_changed.emit()
+        self._stamp_widget.set_selected_frame_index(self._stamp_widget._selected_frame_idx)
+
+    def _on_move_frame_group(self, group_idx: int, direction: int) -> None:
+        if self._selected_object_id is None:
+            return
+        obj = self._project.get_object(self._selected_object_id)
+        if obj is None or not (0 <= group_idx < len(obj.groups)):
+            return
+        cmd = MoveFrameGroupCommand(self._project, obj, group_idx, direction)
+        self._undo_stack.push_and_execute(cmd)
+        self.model_changed.emit()
+        self._stamp_widget.select_frame_range(cmd.result_range[0], cmd.result_range[1])
+
     def _on_stamp_selection_changed(self, region: StampRegion) -> None:
         if self._block_signals:
             return
@@ -1303,6 +1379,7 @@ class ObjectsView(QWidget):
             y=self._spin_reg_y.value(),
             w=self._spin_reg_w.value(),
             h=self._spin_reg_h.value(),
+            duration=obj.frames[0].duration if obj.frames else 0,
         )
         new_nb = self._chk_non_blockable.isChecked()
         new_pickable = self._chk_pickable.isChecked()

@@ -36,6 +36,8 @@ MAX_OBJECTS = 255
 MAX_OBJECT_CELLS = 255
 MAX_OBJECT_FRAMES = 16
 MAX_ANIMATION_SPEED = 255
+MAX_FRAME_DURATION = 255
+MAX_GROUP_REPEAT = 255
 MAX_INSTANCES_PER_ROOM = 255
 MAX_STYLES = 256
 MAX_TELEPORTS = 255
@@ -138,6 +140,14 @@ class CompiledFrame:
     y: int
     w: int
     h: int
+    duration: int = 0
+
+
+@dataclass(frozen=True)
+class CompiledFrameGroup:
+    first: int
+    last: int
+    repeat: int = 1
 
 
 @dataclass
@@ -152,6 +162,7 @@ class CompiledObject:
     colpf3: bool
     frames: list[CompiledFrame]
     animation_speed: int = 0
+    groups: list[CompiledFrameGroup] = field(default_factory=list)
     cells: bytes = b""
     has_pixel11: bool = False
     cell_block_name: str = ""
@@ -208,9 +219,17 @@ class CompiledAnimation:
     slot_count: int
     bank_index: int
     use_form2: bool
+    uniform_duration: bool
+    effective_durations: tuple[int, ...]
+    has_groups: bool
+    effective_groups: tuple[CompiledFrameGroup, ...]
     flags_byte: int
     scodes_label: str
     data_label: str
+    dur_label: str
+    dur_offset: int
+    grp_label: str
+    extra_delta_bytes: int
     encoded_bytes: int
     naive_bytes: int
 
@@ -295,6 +314,12 @@ class AnimObjectStats:
     speed: int
     bank_index: int
     form: str
+    uniform_duration: bool
+    effective_durations: tuple[int, ...]
+    duration_bytes: int
+    group_count: int
+    group_bytes: int
+    extra_delta_bytes: int
     encoded_bytes: int
     naive_bytes: int
 
@@ -324,6 +349,14 @@ class CompileReport:
     anim_stats: list[AnimObjectStats]
     anim_frame_raw_bytes: int
     anim_frame_dedup_bytes: int
+    anim_uniform_count: int
+    anim_var_dur_count: int
+    anim_dur_table_count: int
+    anim_dur_bytes: int
+    anim_grouped_count: int
+    anim_grp_table_count: int
+    anim_grp_bytes: int
+    anim_extra_delta_bytes: int
     room_count: int
     room_max_id: int
     room_id_gaps: int
@@ -358,16 +391,26 @@ class CompileReport:
                 f"  Animation data: {self.anim_frame_raw_bytes} B naive (8*slots*frames) -> "
                 f"{self.anim_frame_dedup_bytes} B encoded (saved {self.anim_frame_raw_bytes - self.anim_frame_dedup_bytes} B)"
             ),
+            (
+                f"  Animation duration tables: {self.anim_dur_table_count} table(s), {self.anim_dur_bytes} B "
+                f"(uniform objects={self.anim_uniform_count}, variable={self.anim_var_dur_count})"
+            ),
+            (
+                f"  Animation group tables: {self.anim_grp_table_count} table(s), {self.anim_grp_bytes} B "
+                f"(grouped objects={self.anim_grouped_count}), extra Form2 deltas={self.anim_extra_delta_bytes} B"
+            ),
             f"  ID-gap table waste: {self.id_gap_wasted_bytes} B",
         ]
         if self.anim_stats:
             lines.append("  Animated objects breakdown:")
             for ast_item in self.anim_stats:
                 saved_obj = ast_item.naive_bytes - ast_item.encoded_bytes
+                dur_desc = "uniform" if ast_item.uniform_duration else f"var({ast_item.duration_bytes} B)"
+                grp_desc = f", groups={ast_item.group_count} ({ast_item.group_bytes} B)" if ast_item.group_count else ""
                 lines.append(
                     f"    Anim #{ast_item.anim_idx} (obj #{ast_item.object_id} '{ast_item.name}'): "
                     f"const={ast_item.constant_cells}, vary={ast_item.varying_cells}, slots={ast_item.slot_count}, "
-                    f"{ast_item.frame_count} frames @ speed={ast_item.speed}, bank={ast_item.bank_index}, "
+                    f"{ast_item.frame_count} frames @ speed={ast_item.speed} ({dur_desc}{grp_desc}), bank={ast_item.bank_index}, "
                     f"form={ast_item.form}: {ast_item.encoded_bytes} B (naive {ast_item.naive_bytes} B, saved {saved_obj} B)"
                 )
         lines.append("  Per-room instance + style payload (vs 5-plane baseline & 960 B raw screen):")
@@ -832,12 +875,18 @@ def compile_project(
                     f"Object '{oname}' (ID {oid}) frame {f_idx} size {rw}x{rh} "
                     f"differs from frame 0 size {base_wh[0]}x{base_wh[1]}."
                 )
+            fdur = _req_int(
+                reg.get("duration", 0),
+                f"object {oname}.frames[{f_idx}].duration",
+                min_val=0,
+                max_val=MAX_FRAME_DURATION,
+            )
             if grp.has_image and (rx + rw > grp.width_glyphs or ry + rh > grp.height_glyphs):
                 raise RoomCompileError(
                     f"Object '{oname}' (ID {oid}) frame {f_idx} ({rx},{ry},{rw},{rh}) "
                     f"exceeds PNG glyph bounds {grp.width_glyphs}x{grp.height_glyphs} of group '{grp.name}'."
                 )
-            parsed_frames.append(CompiledFrame(x=rx, y=ry, w=rw, h=rh))
+            parsed_frames.append(CompiledFrame(x=rx, y=ry, w=rw, h=rh, duration=fdur))
 
         if anim_speed > 0 and len(parsed_frames) == 1:
             warn(
@@ -849,6 +898,59 @@ def compile_project(
                 "ANIM_FRAMES_SPEED_ZERO",
                 f"Object '{oname}' (ID {oid}) has {len(parsed_frames)} frames with animation_speed=0 (unused).",
             )
+        if anim_speed == 0 and any(f.duration > 0 for f in parsed_frames):
+            warn(
+                "ANIM_FRAME_DURATION_SPEED_ZERO",
+                f"Object '{oname}' (ID {oid}) has frame duration override(s) > 0 with animation_speed=0 (ignored).",
+            )
+
+        parsed_groups: list[CompiledFrameGroup] = []
+        raw_groups = o.get("groups")
+        if raw_groups is not None:
+            if not isinstance(raw_groups, list):
+                raise RoomCompileError(f"Object '{oname}' (ID {oid}) 'groups' must be a list.")
+            for g_idx, g_raw in enumerate(raw_groups):
+                if not isinstance(g_raw, Mapping):
+                    raise RoomCompileError(
+                        f"Object '{oname}' (ID {oid}) groups[{g_idx}] must be a mapping."
+                    )
+                gf = _req_int(g_raw.get("first"), f"object {oname}.groups[{g_idx}].first")
+                gl = _req_int(g_raw.get("last"), f"object {oname}.groups[{g_idx}].last")
+                gr = _req_int(
+                    g_raw.get("repeat", 1),
+                    f"object {oname}.groups[{g_idx}].repeat",
+                    min_val=1,
+                    max_val=MAX_GROUP_REPEAT,
+                )
+                if gf < 0 or gl < 0 or gf >= len(parsed_frames) or gl >= len(parsed_frames):
+                    raise RoomCompileError(
+                        f"Object '{oname}' (ID {oid}) groups[{g_idx}] ({gf}..{gl}) "
+                        f"is outside frame range 0..{len(parsed_frames) - 1}."
+                    )
+                if gl - gf + 1 < 2:
+                    raise RoomCompileError(
+                        f"Object '{oname}' (ID {oid}) groups[{g_idx}] ({gf}..{gl}) "
+                        "must contain at least 2 consecutive frames."
+                    )
+                parsed_groups.append(CompiledFrameGroup(first=gf, last=gl, repeat=gr))
+            parsed_groups.sort(key=lambda cfg: (cfg.first, cfg.last))
+            for pg, cg in zip(parsed_groups, parsed_groups[1:]):
+                if pg.last >= cg.first:
+                    raise RoomCompileError(
+                        f"Object '{oname}' (ID {oid}) has overlapping frame groups "
+                        f"({pg.first}..{pg.last}) and ({cg.first}..{cg.last})."
+                    )
+            for cfg in parsed_groups:
+                if cfg.repeat == 1:
+                    warn(
+                        "ANIM_GROUP_REPEAT_ONE",
+                        f"Object '{oname}' (ID {oid}) frame group ({cfg.first}..{cfg.last}) has repeat=1 (no repetition).",
+                    )
+            if not (len(parsed_frames) >= 2 and anim_speed > 0):
+                warn(
+                    "ANIM_GROUPS_NOT_ANIMATED",
+                    f"Object '{oname}' (ID {oid}) defines frame group(s) while not animated (ignored).",
+                )
 
         obj = CompiledObject(
             id=oid,
@@ -861,6 +963,7 @@ def compile_project(
             colpf3=pf3,
             frames=parsed_frames,
             animation_speed=anim_speed,
+            groups=parsed_groups,
         )
         objects.append(obj)
         objects_by_id[oid] = obj
@@ -1162,7 +1265,9 @@ def compile_project(
     # --- Assign animated objects, pack 8-byte pattern pools (<=256/bank), choose Form 1 vs Form 2 ---
     MAX_PATTERNS_PER_BANK = 256
     ANIM_FLAG_FORM2 = 0x80
-    ANIM_BANK_MASK = 0x7F
+    ANIM_FLAG_VAR_DUR = 0x40
+    ANIM_FLAG_GROUPS = 0x20
+    ANIM_BANK_MASK = 0x1F
 
     anim_objs = [obj for obj in objects if obj.is_animated and obj.dedicated_slot_count > 0]
     pool_banks: list[list[bytes]] = []
@@ -1205,8 +1310,8 @@ def compile_project(
                 b_list.append(p)
         obj_bank_idx[obj.id] = chosen_bank
 
-    if len(pool_banks) > 128:
-        raise RoomCompileError(f"Too many animation pattern banks ({len(pool_banks)}; max 128).")
+    if len(pool_banks) > 32:
+        raise RoomCompileError(f"Too many animation pattern banks ({len(pool_banks)}; max 32).")
 
     scodes_blocks: list[tuple[str, bytes]] = []
     scodes_by_bytes: dict[bytes, str] = {}
@@ -1214,13 +1319,23 @@ def compile_project(
     f1_by_bytes: dict[bytes, str] = {}
     delta_blocks: list[tuple[str, bytes]] = []
     delta_by_bytes: dict[bytes, str] = {}
-    f2_headers: list[tuple[str, bytes, list[str]]] = []
-    f2_by_key: dict[tuple[bytes, tuple[str, ...]], str] = {}
+    f2_headers: list[tuple[str, bytes, list[str], bool]] = []
+    f2_by_key: dict[tuple[bytes, tuple[str, ...], bool], str] = {}
+    dur_blocks: list[tuple[str, bytes]] = []
+    dur_by_bytes: dict[bytes, tuple[str, int]] = {}
+    dur_pool_cursor = 0
+    grp_blocks: list[tuple[str, bytes]] = []
+    grp_by_bytes: dict[bytes, str] = {}
 
     animations: list[CompiledAnimation] = []
     anim_stats: list[AnimObjectStats] = []
     anim_frame_raw_bytes = 0
     anim_frame_dedup_bytes = 0
+    anim_uniform_count = 0
+    anim_var_dur_count = 0
+    anim_grouped_count = 0
+    anim_f2_grp_count = 0
+    anim_extra_delta_bytes = 0
 
     for obj in anim_objs:
         assert obj.anim_index is not None
@@ -1229,6 +1344,55 @@ def compile_project(
         b_map = pool_bank_maps[b_idx]
         F = len(obj.frames)
         S = obj.dedicated_slot_count
+
+        # Resolve per-frame effective durations & deduplicate non-uniform tables
+        eff_durs = tuple(f.duration if f.duration > 0 else obj.animation_speed for f in obj.frames)
+        is_uniform = len(set(eff_durs)) == 1
+        if is_uniform:
+            anim_uniform_count += 1
+            speed_or_offset = eff_durs[0]
+            dur_lbl = ""
+            dur_off = 0
+            dur_obj_bytes = 0
+        else:
+            anim_var_dur_count += 1
+            dur_payload = bytes(eff_durs)
+            found_dur = dur_by_bytes.get(dur_payload)
+            if found_dur is None:
+                dur_lbl = f"anim_dur_{len(dur_blocks)}"
+                dur_off = dur_pool_cursor
+                dur_by_bytes[dur_payload] = (dur_lbl, dur_off)
+                dur_blocks.append((dur_lbl, dur_payload))
+                dur_pool_cursor += len(dur_payload)
+            else:
+                dur_lbl, dur_off = found_dur
+            speed_or_offset = dur_off
+            dur_obj_bytes = len(dur_payload)
+
+        # Effective groups: repeat==1 or covering whole 0..F-1 behaves identically to ungrouped
+        eff_groups = tuple(
+            g for g in obj.groups if g.repeat > 1 and not (g.first == 0 and g.last == F - 1)
+        )
+        has_groups = bool(eff_groups)
+        if has_groups:
+            anim_grouped_count += 1
+            G = len(eff_groups)
+            ctrl = bytearray(F)
+            pairs_bytes = bytearray()
+            for gi, g in enumerate(eff_groups):
+                ctrl[g.first] = F + 2 * gi
+                ctrl[g.last] = 0x80 | gi
+                pairs_bytes.extend((g.repeat, g.first))
+            grp_payload = bytes(ctrl) + bytes(pairs_bytes)
+            grp_lbl = grp_by_bytes.get(grp_payload)
+            if grp_lbl is None:
+                grp_lbl = f"anim_grp_{len(grp_blocks)}"
+                grp_by_bytes[grp_payload] = grp_lbl
+                grp_blocks.append((grp_lbl, grp_payload))
+            grp_obj_bytes = len(grp_payload)
+        else:
+            grp_lbl = ""
+            grp_obj_bytes = 0
 
         # Build seq_matrix[f][s] -> 8-bit pattern index in bank b_idx
         seq_matrix = [
@@ -1247,39 +1411,54 @@ def compile_project(
         f1_payload = bytes(seq_matrix[f][s] for f in range(F) for s in range(S))
         size_f1 = len(f1_payload)
 
-        # Form 2: frame 0 patterns (S) + F delta pointers (2*F) + cyclic delta blocks
-        frame_deltas: list[bytes] = []
-        for k in range(F):
-            prev = (k - 1) % F
+        # Form 2: normal transitions (k-1)->k plus loop-back transitions last_g->first_g (when grouped)
+        def _delta_for(src_f: int, dst_f: int) -> bytes:
             pairs = [
-                (s, seq_matrix[k][s])
+                (s, seq_matrix[dst_f][s])
                 for s in range(S)
-                if seq_matrix[k][s] != seq_matrix[prev][s]
+                if seq_matrix[dst_f][s] != seq_matrix[src_f][s]
             ]
-            d_bytes = bytes([len(pairs)] + [v for pair in pairs for v in pair])
-            frame_deltas.append(d_bytes)
-        size_f2 = S + 2 * F + sum(len(d) for d in frame_deltas)
+            return bytes([len(pairs)] + [v for pair in pairs for v in pair])
+
+        norm_deltas = [_delta_for((k - 1) % F, k) for k in range(F)]
+        loop_deltas = [_delta_for(g.last, g.first) for g in eff_groups] if has_groups else []
+        all_deltas = norm_deltas + loop_deltas
+        if has_groups:
+            unique_hdr_deltas = list(dict.fromkeys(all_deltas))
+            size_f2 = S + 1 + 2 * len(all_deltas) + sum(len(d) for d in unique_hdr_deltas)
+        else:
+            size_f2 = S + 2 * F + sum(len(d) for d in norm_deltas)
 
         use_form2 = size_f2 < size_f1  # tie -> Form 1
         naive_bytes = GLYPH_BYTES * S * F
         anim_frame_raw_bytes += naive_bytes
+        extra_delta_obj_bytes = 0
 
         if use_form2:
+            if has_groups:
+                anim_f2_grp_count += 1
             d_labels: list[str] = []
-            for d_bytes in frame_deltas:
+            for d_idx, d_bytes in enumerate(all_deltas):
                 dlbl = delta_by_bytes.get(d_bytes)
                 if dlbl is None:
                     dlbl = f"anim_d_{len(delta_blocks)}"
                     delta_by_bytes[d_bytes] = dlbl
                     delta_blocks.append((dlbl, d_bytes))
+                    if d_idx >= F:
+                        extra_delta_obj_bytes += len(d_bytes)
+                        anim_extra_delta_bytes += len(d_bytes)
                 d_labels.append(dlbl)
             f0_pat_bytes = bytes(seq_matrix[0])
-            f2_key = (f0_pat_bytes, tuple(d_labels))
+            f2_key = (f0_pat_bytes, tuple(d_labels), has_groups)
             data_lbl = f2_by_key.get(f2_key)
             if data_lbl is None:
                 data_lbl = f"anim_f2_{len(f2_headers)}"
                 f2_by_key[f2_key] = data_lbl
-                f2_headers.append((data_lbl, f0_pat_bytes, d_labels))
+                f2_headers.append((data_lbl, f0_pat_bytes, d_labels, has_groups))
+                if has_groups:
+                    hdr_extra = 1 + 2 * len(loop_deltas)
+                    extra_delta_obj_bytes += hdr_extra
+                    anim_extra_delta_bytes += hdr_extra
             encoded_bytes = size_f2
         else:
             data_lbl = f1_by_bytes.get(f1_payload)
@@ -1290,20 +1469,33 @@ def compile_project(
             encoded_bytes = size_f1
 
         anim_frame_dedup_bytes += encoded_bytes
-        flags_byte = (ANIM_FLAG_FORM2 if use_form2 else 0) | (b_idx & ANIM_BANK_MASK)
+        flags_byte = (
+            (ANIM_FLAG_FORM2 if use_form2 else 0)
+            | (0 if is_uniform else ANIM_FLAG_VAR_DUR)
+            | (ANIM_FLAG_GROUPS if has_groups else 0)
+            | (b_idx & ANIM_BANK_MASK)
+        )
         animations.append(
             CompiledAnimation(
                 index=obj.anim_index,
                 obj=obj,
                 group_ident_lower=grp.ident_lower,
-                speed=obj.animation_speed,
+                speed=speed_or_offset,
                 frame_count=F,
                 slot_count=S,
                 bank_index=b_idx,
                 use_form2=use_form2,
+                uniform_duration=is_uniform,
+                effective_durations=eff_durs,
+                has_groups=has_groups,
+                effective_groups=eff_groups,
                 flags_byte=flags_byte,
                 scodes_label=sc_lbl,
                 data_label=data_lbl,
+                dur_label=dur_lbl,
+                dur_offset=dur_off,
+                grp_label=grp_lbl,
+                extra_delta_bytes=extra_delta_obj_bytes,
                 encoded_bytes=encoded_bytes,
                 naive_bytes=naive_bytes,
             )
@@ -1320,10 +1512,26 @@ def compile_project(
                 speed=obj.animation_speed,
                 bank_index=b_idx,
                 form="form2" if use_form2 else "form1",
+                uniform_duration=is_uniform,
+                effective_durations=eff_durs,
+                duration_bytes=dur_obj_bytes,
+                group_count=len(eff_groups),
+                group_bytes=grp_obj_bytes,
+                extra_delta_bytes=extra_delta_obj_bytes,
                 encoded_bytes=encoded_bytes,
                 naive_bytes=naive_bytes,
             )
         )
+
+    unique_dur_bytes = dur_pool_cursor
+    anim_dur_wide = 1 if unique_dur_bytes > 256 else 0
+    if anim_dur_wide:
+        for ca in animations:
+            if not ca.uniform_duration:
+                ca.speed = 0
+    total_dur_rom_bytes = unique_dur_bytes + (2 * len(animations) if anim_dur_wide else 0)
+    unique_grp_bytes = sum(len(p) for _, p in grp_blocks)
+    total_grp_rom_bytes = unique_grp_bytes + (2 * len(animations) if unique_grp_bytes > 0 else 0)
 
     # --- Deduplicate object cell blocks ---
     cell_block_by_bytes: dict[bytes, str] = {}
@@ -1821,12 +2029,20 @@ def compile_project(
             f"ANIM_COUNT              = {len(animations)}",
             f"ANIM_POOL_COUNT         = {len(pool_banks)}",
             f"ANIM_PATTERN_COUNT      = {sum(len(b) for b in pool_banks)}",
+            f"ANIM_DUR_TABLE_COUNT    = {len(dur_blocks)}",
+            f"ANIM_DUR_BYTES          = {unique_dur_bytes}",
+            f"ANIM_DUR_WIDE           = {anim_dur_wide}",
+            f"ANIM_GRP_TABLE_COUNT    = {len(grp_blocks)}",
+            f"ANIM_GRP_BYTES          = {unique_grp_bytes}",
+            f"ANIM_F2_GRP_COUNT       = {anim_f2_grp_count}",
             f"MAX_ROOM_ANIMS          = {max_room_anims}",
             f"MAX_ROOM_ANIM_SLOTS     = {max_room_anim_slots}",
             f"MAX_ROOM_FORM1_SLOTS    = {max_room_form1_slots}",
             "ANIM_PAL_HZ             = 50",
             "ANIM_FLAG_FORM2         = $80",
-            "ANIM_BANK_MASK          = $7F",
+            "ANIM_FLAG_VAR_DUR       = $40",
+            "ANIM_FLAG_GROUPS        = $20",
+            "ANIM_BANK_MASK          = $1F",
             "",
             "; --- Bit Flags & Masks ---",
             f"OBJ_FLAG_NON_BLOCKABLE  = ${OBJ_FLAG_NON_BLOCKABLE:02X}",
@@ -2188,6 +2404,20 @@ def compile_project(
         ("anim_data_lo", [f"<{a.data_label}" for a in animations]),
         ("anim_data_hi", [f">{a.data_label}" for a in animations]),
     ]
+    if anim_dur_wide:
+        anim_fields.extend(
+            [
+                ("anim_dur_lo", ["$00" if a.uniform_duration else f"<{a.dur_label}" for a in animations]),
+                ("anim_dur_hi", ["$00" if a.uniform_duration else f">{a.dur_label}" for a in animations]),
+            ]
+        )
+    if unique_grp_bytes > 0:
+        anim_fields.extend(
+            [
+                ("anim_grp_lo", ["$00" if not a.has_groups else f"<{a.grp_label}" for a in animations]),
+                ("anim_grp_hi", ["$00" if not a.has_groups else f">{a.grp_label}" for a in animations]),
+            ]
+        )
     anim_bytes = 0
     for lbl, seq in anim_fields:
         anim_lines.append(lbl)
@@ -2218,10 +2448,13 @@ def compile_project(
         anim_lines.append("")
 
     if f2_headers:
-        anim_lines.append("; --- Form 2: frame 0 patterns (S B) + [<delta_0..F-1][>delta_0..F-1] ---")
-        for lbl, f0_pats, d_labels in f2_headers:
-            anim_lines.append(f"{lbl} ; {len(f0_pats)} slot(s), {len(d_labels)} frame(s)")
+        anim_lines.append("; --- Form 2: frame 0 patterns (S B) + [optional T byte] + [<delta..][>delta..] ---")
+        for lbl, f0_pats, d_labels, grp_hdr in f2_headers:
+            anim_lines.append(f"{lbl} ; {len(f0_pats)} slot(s), {len(d_labels)} transition(s)")
             anim_lines.append(_format_bytes(f0_pats))
+            if grp_hdr:
+                anim_lines.append(f"    .byte ${len(d_labels):02X} ; T = F + G transitions")
+                anim_bytes += 1
             anim_lines.append("    .byte " + ", ".join(f"<{dl}" for dl in d_labels))
             anim_lines.append("    .byte " + ", ".join(f">{dl}" for dl in d_labels))
             anim_bytes += len(f0_pats) + 2 * len(d_labels)
@@ -2231,6 +2464,33 @@ def compile_project(
         anim_lines.append("; --- Form 2 delta blocks: [count, slot_0, pat_0, ...] ---")
         for lbl, payload in delta_blocks:
             anim_lines.append(f"{lbl} ; {len(payload)} B ({payload[0]} pair(s))")
+            anim_lines.append(_format_bytes(payload))
+            anim_bytes += len(payload)
+        anim_lines.append("")
+
+    if dur_blocks:
+        if anim_dur_wide:
+            anim_lines.append("; --- Per-frame duration tables (wide mode > 256 B unique) ---")
+            for lbl, payload in dur_blocks:
+                anim_lines.append(f"{lbl} ; {len(payload)} frame(s)")
+                anim_lines.append(_format_bytes(payload))
+                anim_bytes += len(payload)
+            anim_lines.append("")
+        else:
+            anim_lines.append(
+                f"; --- Deduplicated per-frame duration pool ({unique_dur_bytes} B <= 256 B; indexed via anim_speed) ---"
+            )
+            anim_lines.append("anim_dur_pool")
+            for lbl, payload in dur_blocks:
+                anim_lines.append(f"{lbl} ; {len(payload)} frame(s)")
+                anim_lines.append(_format_bytes(payload))
+                anim_bytes += len(payload)
+            anim_lines.append("")
+
+    if grp_blocks:
+        anim_lines.append("; --- Frame group tables: ctrl[0..F-1] (0=none, +off=start, $80|g=end) + pairs [repeat, first] ---")
+        for lbl, payload in grp_blocks:
+            anim_lines.append(f"{lbl} ; {len(payload)} B")
             anim_lines.append(_format_bytes(payload))
             anim_bytes += len(payload)
         anim_lines.append("")
@@ -2296,6 +2556,14 @@ def compile_project(
         anim_stats=anim_stats,
         anim_frame_raw_bytes=anim_frame_raw_bytes,
         anim_frame_dedup_bytes=anim_frame_dedup_bytes,
+        anim_uniform_count=anim_uniform_count,
+        anim_var_dur_count=anim_var_dur_count,
+        anim_dur_table_count=len(dur_blocks),
+        anim_dur_bytes=total_dur_rom_bytes,
+        anim_grouped_count=anim_grouped_count,
+        anim_grp_table_count=len(grp_blocks),
+        anim_grp_bytes=total_grp_rom_bytes,
+        anim_extra_delta_bytes=anim_extra_delta_bytes,
         room_count=len(rooms),
         room_max_id=room_max_id,
         room_id_gaps=room_id_gaps,

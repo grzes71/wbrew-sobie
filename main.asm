@@ -46,7 +46,13 @@ anim_st_vis             = anim_st_frame + ANIM_STATE_CAP    ; ANIM_STATE_CAP B (
 anim_st_pend            = anim_st_vis + ANIM_STATE_CAP      ; ANIM_STATE_CAP B
 anim_st_pos             = anim_st_pend + ANIM_STATE_CAP     ; ANIM_STATE_CAP B (slot / delta pair cursor)
 anim_st_sbase           = anim_st_pos + ANIM_STATE_CAP      ; ANIM_STATE_CAP B (Form 1 offset in slot_cur)
-anim_slot_cur           = anim_st_sbase + ANIM_STATE_CAP    ; ANIM_SLOT_CAP B (Form 1 last pat_idx)
+anim_st_rep             = anim_st_sbase + ANIM_STATE_CAP    ; ANIM_STATE_CAP B (group pass counter)
+    .if ANIM_F2_GRP_COUNT > 0
+anim_st_vrep            = anim_st_rep + ANIM_STATE_CAP      ; ANIM_STATE_CAP B (Form 2 visible pass counter)
+anim_slot_cur           = anim_st_vrep + ANIM_STATE_CAP     ; ANIM_SLOT_CAP B (Form 1 last pat_idx)
+    .else
+anim_slot_cur           = anim_st_rep + ANIM_STATE_CAP      ; ANIM_SLOT_CAP B (Form 1 last pat_idx)
+    .endif
     .ifdef ANIM_COUNT_COPIES
 anim_copy_count         = anim_slot_cur + ANIM_SLOT_CAP     ; 1 B: per-tick copy telemetry
 ANIM_RAM_END            = anim_copy_count + 1

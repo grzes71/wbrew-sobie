@@ -95,10 +95,12 @@ Because `room_left` points 1 byte before `room_left_base`:
 | `TELEPORT_COUNT` | equate | Bidirectional teleport entry count (`0..255`) |
 | `ANIM_COUNT` | equate | Active animated object count (`0..255`) with `len(frames) >= 2`, `animation_speed > 0`, and `>= 1` varying cell |
 | `ANIM_POOL_COUNT`, `ANIM_PATTERN_COUNT` | equate | Pattern-pool bank count (`ceil(pats / 256)` when `ANIM_COUNT > 0`) and deduplicated 8-byte pattern count |
+| `ANIM_DUR_TABLE_COUNT`, `ANIM_DUR_BYTES`, `ANIM_DUR_WIDE` | equate | Deduplicated non-uniform duration table count, total duration bytes, and lookup mode (`0` = compact pool `<= 256 B`, `1` = `_lo/_hi` pointers) |
+| `ANIM_GRP_TABLE_COUNT`, `ANIM_GRP_BYTES`, `ANIM_F2_GRP_COUNT` | equate | Deduplicated effective group table count, total group table bytes (`0` when no effective groups), and grouped Form 2 object count |
 | `MAX_ROOM_ANIMS` | equate | Maximum unique animated objects present in any single room (`0..255`) |
 | `MAX_ROOM_ANIM_SLOTS`, `MAX_ROOM_FORM1_SLOTS` | equate | Maximum combined dedicated slots (`S`) and Form-1 slots (`anim_slot_cur` RAM capacity) in any single room |
 | `ANIM_PAL_HZ` | equate | `50` (PAL 50 Hz VBLANK timebase; PAL only) |
-| `ANIM_FLAG_FORM2`, `ANIM_BANK_MASK` | equate | `anim_flags` bit 7 (`$80` = Form 2 cyclic delta) and bits 6..0 (`$7F` = pool bank index) |
+| `ANIM_FLAG_FORM2`, `ANIM_FLAG_VAR_DUR`, `ANIM_FLAG_GROUPS`, `ANIM_BANK_MASK` | equate | `anim_flags` bit 7 (`$80` = Form 2 cyclic delta), bit 6 (`$40` = per-frame duration table), bit 5 (`$20` = effective frame groups), and bits 4..0 (`$1F` = pool bank index) |
 | `OBJ_FLAG_NON_BLOCKABLE`, `OBJ_FLAG_COLPF3`, `OBJ_FLAG_PICKABLE` | equate | Bit masks `$01`, `$02`, and `$04` for `obj_flags` |
 | `ROOM_FLAG_UNIFORM_STYLE` | equate | Bit mask `$01` for `room_flags` |
 | `INST_Y_REPEAT_MASK`, `INST_Y_COORD_MASK` | equate | Bit masks `$80` and `$1F` for instance `y_flag` byte |
@@ -168,17 +170,21 @@ All `anim_*` metadata arrays are **0-based SoA** (`0 <= Y < ANIM_COUNT`) so `roo
 
 | Label | Size | Indexing | Meaning |
 |---|---|---|---|
-| `anim_speed` | `ANIM_COUNT B` | `[anim_idx]` | PAL VBLANK ticks between frame changes (`1..255`; `50` = 1.00 s) |
+| `anim_speed` | `ANIM_COUNT B` | `[anim_idx]` | When `anim_flags & $40 == 0`: uniform effective duration (`1..255` PAL ticks). When `anim_flags & $40 != 0` and `ANIM_DUR_WIDE == 0`: byte offset into `anim_dur_pool` (`0` when `ANIM_DUR_WIDE == 1`). |
 | `anim_frames` | `ANIM_COUNT B` | `[anim_idx]` | Frame count `F` (`2..16`) |
 | `anim_slots` | `ANIM_COUNT B` | `[anim_idx]` | Number `S` (`>= 1`) of dedicated charset slots owned by varying cells |
 | `anim_chbase` | `ANIM_COUNT B` | `[anim_idx]` | High byte of target charset (`>charset_<group>`) |
-| `anim_flags` | `ANIM_COUNT B` | `[anim_idx]` | Bit 7 (`$80`) = Form 2 cyclic delta (`0` = Form 1 sequence table); bits 6..0 (`$7F`) = pool bank `b` (`0..ANIM_POOL_COUNT-1`) |
+| `anim_flags` | `ANIM_COUNT B` | `[anim_idx]` | Bit 7 (`$80`) = Form 2 cyclic delta (`0` = Form 1); bit 6 (`$40`) = per-frame duration table (`0` = uniform); bit 5 (`$20`) = effective frame groups (`0` = ungrouped); bits 4..0 (`$1F`) = pool bank `b` (`0..ANIM_POOL_COUNT-1`) |
 | `anim_scodes_lo`, `anim_scodes_hi` | `ANIM_COUNT B` each | `[anim_idx]` | 16-bit pointer to `anim_scodes_<K>` (`S` base char codes in `1..127`) |
 | `anim_data_lo`, `anim_data_hi` | `ANIM_COUNT B` each | `[anim_idx]` | 16-bit pointer to `anim_f1_<K>` (Form 1) or `anim_f2_<K>` (Form 2) |
+| `anim_dur_lo`, `anim_dur_hi` | `ANIM_COUNT B` each | `[anim_idx]` | 16-bit pointer to `anim_dur_<K>` (`$0000` if uniform); emitted **only** when `ANIM_DUR_WIDE == 1` (`> 256` unique duration bytes) |
+| `anim_grp_lo`, `anim_grp_hi` | `ANIM_COUNT B` each | `[anim_idx]` | 16-bit pointer to `anim_grp_<K>` (`$0000` if no effective groups); emitted **only** when `ANIM_GRP_BYTES > 0` |
+| `anim_dur_pool` / `anim_dur_<K>` | `ANIM_DUR_BYTES B` | `[offset + f]` / `[f]` | Deduplicated per-frame effective durations (`1..255` PAL ticks, 1 byte/frame), emitted **only** for non-uniform objects |
+| `anim_grp_<K>` | `F + 2*G B` each | `[ctrl 0..F-1][rep_0, first_0, ...]` | Deduplicated effective group control+pair table (`ctrl[f] = 0` interior/outside, `F + 2*g` at group start, `$80 | g` at group end), emitted **only** when `ANIM_GRP_BYTES > 0` |
 | `anim_scodes_<K>` | `S B` each | `[slot 0..S-1]` | Dedicated charset base codes (`1..127`) matching each slot in `anim_f1`/`anim_f2` |
 | `anim_f1_<K>` | `S * F B` | `[frame * S + slot]` | **Form 1** (selected when `size_f2 >= size_f1`): frame-major pattern indices into pool bank `b` |
-| `anim_f2_<K>` | `S + 2*F B` | `[f0_pats][<d..][>d..]` | **Form 2** (selected when `size_f2 < size_f1`): frame-0 patterns (`S B`) + split pointers to `anim_d_<K>` |
-| `anim_d_<K>` | `1 + 2*C B` | `[C, s0, p0, ...]` | Deduplicated cyclic delta block entering frame `k` from `(k-1) mod F` (`C` changed pairs) |
+| `anim_f2_<K>` | `S + 2*F B` (ungrouped) or `S + 1 + 2*(F+G) B` (grouped) | `[f0_pats]([T])[<d..][>d..]` | **Form 2** (selected when `size_f2 < size_f1`): frame-0 patterns (`S B`), optional `T = F + G` transition count byte (`ANIM_FLAG_GROUPS` set), and split pointers to `anim_d_<K>` (deltas `0..F-1` for `(k-1)->k` plus `F..F+G-1` for `last_g->first_g` loop-backs) |
+| `anim_d_<K>` | `1 + 2*C B` | `[C, s0, p0, ...]` | Deduplicated cyclic delta block (`C` changed `[slot, pat]` pairs) |
 | `anim_pool<b>_b0..b7` | `P B` × 8 | `[pat_idx]` | Deduplicated cross-object pattern pool split across `8` byte planes (`P <= 256` per bank) |
 | `anim_pb_lo`, `anim_pb_hi` | `8 * ANIM_POOL_COUNT B` | `[b * 8 + row]` | Plane lookup tables emitted **only** when `ANIM_POOL_COUNT > 1` (`> 256` total patterns) |
 
@@ -410,19 +416,20 @@ Compared to the 5-plane baseline (`5 * N` bytes, storing `rep_w = 1, rep_h = 1` 
 4. `game_update` waits for a rising edge on `zp_fire_pressed` (`engine/input.asm`) and restores `VVBLKD = XITVBV` + `zp_anim_active = 0` before transitioning to `STATE_GAME_OVER_*`.
 
 ### VBI Object Animation Engine (`engine/anim.asm`, PAL 50 Hz Only)
-- **Deferred VBI (`game_vbi_deferred` via `VVBLKD`):** Tests `zp_anim_active` first; on static rooms (`zp_anim_active == 0`) `anim_tick` exits in `12` cycles (`20` cycles total for `game_vbi_deferred` up to `XITVBV`), resets `zp_dli_idx = 0`, and exits cleanly.
+- **Deferred VBI (`game_vbi_deferred` via `VVBLKD`):** Tests `zp_anim_active` first; on static rooms (`zp_anim_active == 0`) `anim_tick` exits in `11` cycles (`bne @active / rts`; `19` cycles total for `game_vbi_deferred` up to `XITVBV`), resets `zp_dli_idx = 0`, and exits cleanly.
 - **Minimal Real Copies Only & Budget (`ANIM_VBI_GLYPH_BUDGET = 12` slots/VBI = `<= 96` bytes):**
-  - Pass 1 decrements all `anim_st_cnt[0..anim_room_count-1]` counters unconditionally (zero timer drift even when copies defer) and advances `anim_st_frame` modulo `anim_frames`.
+  - Pass 1 decrements all `anim_st_cnt[0..anim_room_count-1]` counters unconditionally (zero timer drift even when copies defer), advances `anim_st_frame` (applying `anim_grp_*` pass counters `anim_st_rep` when `ANIM_FLAG_GROUPS` is set: decrementing `anim_st_rep` on group end to jump to `first_g`, or initializing `anim_st_rep = repeat_g` when entering `first_g` from outside), and reloads `anim_st_cnt` with the entered frame's effective duration (`anim_speed[id]` when `ANIM_FLAG_VAR_DUR == 0`, else `anim_dur_pool[anim_speed[id] + frame]` in compact mode or `(anim_dur_lo/hi[id])[frame]` when `ANIM_DUR_WIDE == 1`).
   - Pass 2 services pending objects round-robin from `zp_anim_cursor`:
     - **Form 1:** Compares each slot's target pattern index against `anim_slot_cur[sbase + s]`, skipping unchanged slots with `0` charset writes and `0` budget cost.
-    - **Form 2:** Walks `[count, slot, pat]` delta pairs frame-by-frame (`anim_st_vis` -> `anim_st_frame`), preserving any in-flight `anim_st_pos` if deferred mid-delta so no frame change is lost.
+    - **Form 2:** Walks `[count, slot, pat]` delta pairs transition-by-transition (`(anim_st_vis, anim_st_vrep)` -> `(anim_st_frame, anim_st_rep)` using `anim_grp_*` and loop-back deltas `F + g` when `ANIM_FLAG_GROUPS` is set), preserving any in-flight `anim_st_pos` if deferred mid-delta so no frame change is lost.
   - When `ANIM_POOL_COUNT <= 1`, `_anim_copy_pattern` uses unrolled `anim_pool0_b0..b7,X` loads (`~110` cycles/glyph); when `ANIM_POOL_COUNT > 1` (`> 256` unique patterns), it indexes `(anim_pb_lo/hi)` per bank.
 - **Measured CPU Cost (`py65`, production build `count_copies=False`):**
-  - Static room (`zp_anim_active == 0`): `room_anim_init` = `32` cyc, `anim_tick` = `12` cyc, `game_vbi_deferred` = `20` cyc.
-  - Single-pool Form 1 (`12` varying slots): `0` changed slots = `842` cyc; `1` changed slot = `531`–`550` cyc; `12` worst case = `3,047` cyc (`game_vbi_deferred` = `3,072` cyc, ~26.9 scanlines).
-  - Single-pool Form 2 (`12` varying slots): `1` delta pair = `626` cyc (`game_vbi_deferred` = `651` cyc); `12` worst case = `3,057` cyc (`game_vbi_deferred` = `3,082` cyc, ~27.0 scanlines).
-  - Split-pool (`ANIM_POOL_COUNT = 2`, `12` worst case): `anim_tick` = `6,535` cyc (`game_vbi_deferred` = `6,560` cyc).
-- **Room Re-entry Reset:** `room_anim_init` copies frame `0` bytes into each varying dedicated charset RAM slot, initializes `anim_slot_cur` for Form 1 objects, and resets `anim_st_cnt = anim_speed` and `anim_st_vis = anim_st_frame = anim_st_pos = 0`.
+  - Static room (`zp_anim_active == 0`): `anim_tick` = `11` cyc (`bne @active / rts`).
+  - Ungrouped idle countdown tick: `40` cyc in both all-ungrouped (`ANIM_GRP_BYTES == 0`) and mixed (`ANIM_GRP_BYTES > 0`) builds (`+0` cyc).
+  - Ungrouped 1-slot frame change tick: all-ungrouped Form 1 = `531` cyc (`552` cyc in mixed build, `+21` cyc for single flag test); all-ungrouped Form 2 = `618` cyc (`676` cyc in mixed build).
+  - Grouped Form 1 (1-slot transition): `565`–`603` cyc ungrouped wrap / group entry (`609` cyc interior, `633` cyc loop-back `3->1`, `662` cyc group exit `3->4`).
+  - Grouped Form 2 (1-slot transition): `773`–`800` cyc normal/entry/exit (`1,033` cyc on 2-slot loop-back delta `3->1`).
+- **Room Re-entry Reset:** `room_anim_init` copies frame `0` bytes into each varying dedicated charset RAM slot, initializes `anim_slot_cur` for Form 1 objects, initializes `anim_st_rep`/`anim_st_vrep` to `repeat_0` when frame `0` begins an effective group (`0` otherwise), and resets `anim_st_cnt` to frame `0`'s effective duration and `anim_st_vis = anim_st_frame = anim_st_pos = 0`.
 
 ### Runtime Memory Map & Zero-Page Usage
 
@@ -434,10 +441,10 @@ Compared to the 5-plane baseline (`5 * N` bytes, storing `rep_w = 1, rep_h = 1` 
 | `room_dli_style` | `$34C0..$34D7` | `24 B` | Ordered target style IDs for DLI transitions |
 | `room_dli_count` | `$34D8` | `1 B` | Scheduled DLI transition count (`0..23`) |
 | `cur_room_id` | `$34D9` | `1 B` | Currently displayed 1-based room ID |
-| `anim_room_count`, `anim_st_*`, `anim_slot_cur` | `$34E0..` | `1 + 7*ANIM_STATE_CAP + ANIM_SLOT_CAP B` | Active-room animated object count, IDs, counters, target/visible frames, pending flags, pair/slot cursors, Form 1 bases, and `anim_slot_cur` cache (guarded `< $3800`) |
-| Room Data & Charsets | `$6000..$6949` | `2378 B` | `gen/charsets.asm` (`1 KB` aligned via `ROOMS_ALIGN_CHARSETS = 1`), `gen/styles.asm`, `gen/objects.asm`, `gen/rooms.asm`, `gen/teleports.asm`, `gen/animations.asm`, `gen/intro_text.asm` |
+| `anim_room_count`, `anim_st_*`, `anim_slot_cur` | `$34E0..` | `1 + (8 + (1 if ANIM_F2_GRP_COUNT > 0 else 0))*ANIM_STATE_CAP + ANIM_SLOT_CAP B` | Active-room animated object count, IDs, counters, target/visible frames, group pass counters (`anim_st_rep`, conditional `anim_st_vrep`), pending flags, cursors, Form 1 bases, and `anim_slot_cur` cache (guarded `< $3800`) |
+| Room Data & Charsets | `$6000..$6A7D` | `2686 B` | `gen/charsets.asm` (`1 KB` aligned via `ROOMS_ALIGN_CHARSETS = 1`), `gen/styles.asm`, `gen/objects.asm`, `gen/rooms.asm`, `gen/teleports.asm`, `gen/animations.asm`, `gen/intro_text.asm` |
 | `zp_room_*` | `$B0..$CB` | `28 B` | Plane pointers, stamp cursor, repeat counters, and scratch bytes in [`zeropage.asm`](../zeropage.asm) (`zp_dli_idx = $82` reused for DLI indexing) |
-| `zp_anim_*` | `$E0..$FA` | `27 B` | VBI-safe animation state flags, budget, cursor, source/scode/dest/bank pointers, and Form 1/2 scratch bytes in [`zeropage.asm`](../zeropage.asm) |
+| `zp_anim_*` | `$E0..$FD` | `30 B` | VBI-safe animation state flags, budget, cursor, source/scode/dest/bank pointers, and Form 1/2/group scratch bytes in [`zeropage.asm`](../zeropage.asm) |
 
 ### Known Limitations
 - PAL-only animation timing (`50` Hz VBLANK ticks; NTSC timing is uncalibrated).

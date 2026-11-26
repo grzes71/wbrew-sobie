@@ -644,6 +644,7 @@ class RoomEditorView(QWidget):
         self._preview_palette_by_group: dict[str, str] = {}
         self._anim_counters: dict[int, int] = {}
         self._anim_frames: dict[int, int] = {}
+        self._anim_passes: dict[int, int] = {}
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self._on_anim_tick)
 
@@ -1057,6 +1058,7 @@ class RoomEditorView(QWidget):
     def _reset_anim_preview_state(self) -> None:
         self._anim_counters.clear()
         self._anim_frames.clear()
+        self._anim_passes.clear()
         self._canvas.set_frame_overrides(None)
 
     def _active_room_anim_objects(self) -> list[GameObject]:
@@ -1087,10 +1089,12 @@ class RoomEditorView(QWidget):
         for stale in [oid for oid in self._anim_counters if oid not in active_ids]:
             self._anim_counters.pop(stale, None)
             self._anim_frames.pop(stale, None)
+            self._anim_passes.pop(stale, None)
         for obj in anim_objs:
             if obj.id not in self._anim_counters:
-                self._anim_counters[obj.id] = obj.animation_speed
+                self._anim_counters[obj.id] = obj.effective_frame_duration(0)
                 self._anim_frames[obj.id] = 0
+                self._anim_passes[obj.id] = obj.initial_pass_counter()
         self._canvas.set_frame_overrides(self._anim_frames)
         if not self._anim_timer.isActive():
             self._anim_timer.start(20)  # PAL 50 Hz ticks
@@ -1106,10 +1110,14 @@ class RoomEditorView(QWidget):
             return
         changed = False
         for obj in anim_objs:
-            cnt = self._anim_counters.get(obj.id, obj.animation_speed) - 1
+            cur_f = self._anim_frames.get(obj.id, 0)
+            cur_p = self._anim_passes.get(obj.id, 0)
+            cnt = self._anim_counters.get(obj.id, obj.effective_frame_duration(cur_f)) - 1
             if cnt <= 0:
-                cnt = obj.animation_speed
-                self._anim_frames[obj.id] = (self._anim_frames.get(obj.id, 0) + 1) % obj.frame_count
+                next_f, next_p = obj.step_animation_frame(cur_f, cur_p)
+                self._anim_frames[obj.id] = next_f
+                self._anim_passes[obj.id] = next_p
+                cnt = obj.effective_frame_duration(next_f)
                 changed = True
             self._anim_counters[obj.id] = cnt
         if changed:
