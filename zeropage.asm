@@ -32,7 +32,7 @@ zp_p5_wave_phase    = $97   ; Bieżąca faza fali sinusowej dla 5. gracza (1 baj
 zp_hero_x           = $98   ; Playfield X in color clocks (0..159; HPOSP0 = x + 48)
 zp_hero_y           = $99   ; PMG single-line Y of hero top (22..231)
 zp_hero_draw_y      = $9A   ; Last drawn PMG Y for partial trail clearing
-zp_hero_state       = $9B   ; 0=STANDING, 1=FALLING, 2=JUMPING, 3=SQUATTING
+zp_hero_state       = $9B   ; 0=STANDING, 1=FALLING, 2=JUMPING, 3=SQUATTING, 4=ON_LADDER
 zp_hero_facing      = $9C   ; HERO_FACING_RIGHT (0) / HERO_FACING_LEFT (1)
 zp_hero_anim_set    = $9D   ; Current hero sprite set ID (1..8)
 zp_hero_anim_frame  = $9E   ; Current frame index within set (0..count-1)

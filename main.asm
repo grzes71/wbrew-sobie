@@ -61,11 +61,15 @@ ANIM_RAM_END            = anim_copy_count + 1
 ANIM_RAM_END            = anim_slot_cur + ANIM_SLOT_CAP
     .endif
 room_block_map          = $3700                             ; 120 B ($3700..$3777): 40x24 cell blocking bitmap
+room_ladder_map         = $3778                             ; 120 B ($3778..$37EF): 40x24 cell ladder bitmap
     .if ANIM_RAM_END > room_block_map
         .error "Animation state RAM overflows into room_block_map ($3700)!"
     .endif
 
 PMG_BASE                = $3800     ; 2 KB PMG single-line buffer ($3800..$3FFF)
+    .if (room_ladder_map + 120) > PMG_BASE
+        .error "room_ladder_map overflows into PMG_BASE ($3800)!"
+    .endif
     .if (PMG_BASE & $07FF) <> 0
         .error "PMG_BASE must be 2 KB aligned for single-line resolution!"
     .endif

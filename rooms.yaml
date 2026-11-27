@@ -12,66 +12,66 @@ object_groups:
   - {name: brown, colbk: 0, colpf0: 24, colpf1: 14, colpf2: 18, colpf3: 20}
   - {name: blue-yellow, colbk: 0, colpf0: 118, colpf1: 14, colpf2: 128, colpf3: 238}
   glyphs:
-  - {code: 1, data: "99A7A5290A020200", src: [0, 0]}
-  - {code: 2, data: "CACAC2F272705C97", src: [1, 0]}
-  - {code: 3, data: "A45C7272F202AAE9", src: [2, 0]}
-  - {code: 4, data: "A9A797975C7070C0", src: [3, 0]}
+  - {code: 1, data: "00A7A5290A020200", src: [0, 0]}
+  - {code: 2, data: "00CAC2F272705C97", src: [1, 0]}
+  - {code: 3, data: "005C7272F202AAE9", src: [2, 0]}
+  - {code: 4, data: "00A797975C7070C0", src: [3, 0]}
   - {code: 5, data: "9525271F0A29251F", src: [1, 1]}
   - {code: 6, data: "57D7FC0CB05C5CF0", src: [2, 1]}
-  - {code: 7, data: "000A292929252929", src: [1, 2]}
-  - {code: 8, data: "00707CCC70CCF0CC", src: [2, 2]}
-  - {code: 9, data: "2529252925292925", src: [1, 3]}
-  - {code: 10, data: "70CC70CC70CC70CC", src: [2, 3]}
-  - {code: 11, data: "2925292529090300", src: [1, 4]}
-  - {code: 12, data: "70CC70CC7CF0C000", src: [2, 4]}
+  - {code: 7, data: "000A292929292929", src: [1, 2]}
+  - {code: 8, data: "0070FC7CF07CF07C", src: [2, 2]}
+  - {code: 9, data: "2529252925292529", src: [1, 3]}
+  - {code: 10, data: "F07CF07CF07CF07C", src: [2, 3]}
+  - {code: 11, data: "2529252929090300", src: [1, 4]}
+  - {code: 12, data: "F07CF07CFC70C000", src: [2, 4]}
   - {code: 13, data: "0A2A292A29270900", src: [1, 5]}
   - {code: 14, data: "A49F67575FF77C00", src: [2, 5]}
   - {code: 15, data: "0000000000000202", src: [4, 0]}
-  - {code: 16, data: "0002092699955557", src: [5, 0]}
-  - {code: 17, data: "2C976555557DC200", src: [6, 0]}
-  - {code: 18, data: "00C0F07C5F575F95", src: [7, 0]}
+  - {code: 16, data: "0000002AA9959557", src: [5, 0]}
+  - {code: 17, data: "0000AA955555FE00", src: [6, 0]}
+  - {code: 18, data: "000000A85F575795", src: [7, 0]}
   - {code: 19, data: "000000000000C0C0", src: [8, 0]}
-  - {code: 20, data: "0A2929A6A5A92500", src: [4, 1]}
+  - {code: 20, data: "0A2929A5A5A51F00", src: [4, 1]}
   - {code: 21, data: "5C5C70707070C000", src: [5, 1]}
-  - {code: 22, data: "2725090909090300", src: [7, 1]}
-  - {code: 23, data: "F0FC7CDF7FDFFC00", src: [8, 1]}
-  - {code: 24, data: "00A797BC9777979C", src: [4, 2]}
-  - {code: 25, data: "9F97779F979C9797", src: [4, 3]}
-  - {code: 26, data: "7797977CA7973C00", src: [4, 4]}
+  - {code: 22, data: "2525090909090300", src: [7, 1]}
+  - {code: 23, data: "F0FC7C5F5F5FFC00", src: [8, 1]}
+  - {code: 24, data: "00A7979C9777979C", src: [4, 2]}
+  - {code: 25, data: "97977797979C9797", src: [4, 3]}
+  - {code: 26, data: "7797979CA7977C00", src: [4, 4]}
   - {code: 27, data: "A9979FA79FA79F3C", src: [4, 5]}
-  - {code: 28, data: "AA25070000000000", src: [10, 0]}
-  - {code: 29, data: "CAC9C300A49F3002", src: [11, 0]}
-  - {code: 30, data: "965DF3000A290985", src: [12, 0]}
-  - {code: 31, data: "AC5CFC000AC9C31C", src: [13, 0]}
-  - {code: 32, data: "AB977C007070C000", src: [14, 0]}
-  - {code: 33, data: "0902010000000000", src: [11, 1]}
-  - {code: 34, data: "7373002C9C9C9C1C", src: [12, 1]}
-  - {code: 35, data: "171C00B09C9C9CB0", src: [13, 1]}
-  - {code: 36, data: "300209090B000909", src: [12, 2]}
-  - {code: 37, data: "3000C0C0C000C0C0", src: [13, 2]}
-  - {code: 38, data: "0909030303000000", src: [12, 3]}
-  - {code: 39, data: "00A8FCFCFCFCFC00", src: [0, 6]}
-  - {code: 40, data: "0082EBFFFFFF3C00", src: [1, 6]}
-  - {code: 41, data: "0082EBFFFFF3F300", src: [2, 6]}
-  - {code: 42, data: "00283E3F3F3F0F00", src: [3, 6]}
-  - {code: 43, data: "00A0FAFFFFFFCF00", src: [0, 7]}
-  - {code: 44, data: "00A8FCFCFCCCCC00", src: [1, 7]}
-  - {code: 45, data: "00A8FEFFFFFF3F00", src: [2, 7]}
-  - {code: 46, data: "C0FF00C3CCC3CFCC", src: [2, 8]}
-  - {code: 47, data: "00FF0033CC33FFCC", src: [3, 8]}
-  - {code: 48, data: "03FF0033C333F3C3", src: [4, 8]}
-  - {code: 49, data: "CFCFCFCFCFCCCCCC", src: [2, 9]}
-  - {code: 50, data: "FFFFC3003C3CFFC3", src: [3, 9]}
-  - {code: 51, data: "F3F3F3F3F3333333", src: [4, 9]}
-  - {code: 52, data: "CCCCCCCCCFCFCFCF", src: [2, 10]}
-  - {code: 53, data: "C3C3FF3C3C00C3FF", src: [3, 10]}
-  - {code: 54, data: "33333333F3F3F3F3", src: [4, 10]}
-  - {code: 55, data: "CFCFCFCFCCC0C3CF", src: [2, 11]}
-  - {code: 56, data: "FFF3C00C3FF3C000", src: [3, 11]}
-  - {code: 57, data: "F3F3F33303C3F33F", src: [4, 11]}
-  - {code: 58, data: "FCF0C00000000000", src: [2, 12]}
-  - {code: 59, data: "0F03030000000000", src: [4, 12]}
-  - {code: 60, data: "03FF0030C033F3C3", src: [7, 8]}
+  - {code: 28, data: "00AA250700000000", src: [10, 0]}
+  - {code: 29, data: "00CAC9C300A49F30", src: [11, 0]}
+  - {code: 30, data: "00965DF3000A2909", src: [12, 0]}
+  - {code: 31, data: "00AC5CFC000AC9C3", src: [13, 0]}
+  - {code: 32, data: "00AB977C007070C0", src: [14, 0]}
+  - {code: 33, data: "0209020100000000", src: [11, 1]}
+  - {code: 34, data: "857373002C9C9C9C", src: [12, 1]}
+  - {code: 35, data: "1C171C00B09C9C9C", src: [13, 1]}
+  - {code: 36, data: "1C300209090B0009", src: [12, 2]}
+  - {code: 37, data: "B03000C0C0C000C0", src: [13, 2]}
+  - {code: 38, data: "0909090303030000", src: [12, 3]}
+  - {code: 39, data: "C000000000000000", src: [13, 3]}
+  - {code: 40, data: "00A8FCFCFCFCFC00", src: [0, 6]}
+  - {code: 41, data: "0082EBFFFFFF3C00", src: [1, 6]}
+  - {code: 42, data: "0082EBFFFFF3F300", src: [2, 6]}
+  - {code: 43, data: "00283E3F3F3F0F00", src: [3, 6]}
+  - {code: 44, data: "00A0FAFFFFFFCF00", src: [0, 7]}
+  - {code: 45, data: "00A8FCFCFCCCCC00", src: [1, 7]}
+  - {code: 46, data: "00A8FEFFFFFF3F00", src: [2, 7]}
+  - {code: 47, data: "00C0FF00C3CCC3CF", src: [2, 8]}
+  - {code: 48, data: "0000FF0033CC33FF", src: [3, 8]}
+  - {code: 49, data: "0003FF0033C333F3", src: [4, 8]}
+  - {code: 50, data: "CFCFCFCFCFCCCCCC", src: [2, 9]}
+  - {code: 51, data: "FFFFC3003C3CFFC3", src: [3, 9]}
+  - {code: 52, data: "F3F3F3F3F3333333", src: [4, 9]}
+  - {code: 53, data: "CCCCCCCCCFCFCFCF", src: [2, 10]}
+  - {code: 54, data: "C3C3FF3C3C00C3FF", src: [3, 10]}
+  - {code: 55, data: "33333333F3F3F3F3", src: [4, 10]}
+  - {code: 56, data: "CFCFCFCFCCC0C3CF", src: [2, 11]}
+  - {code: 57, data: "FFF3C00C3FF3C000", src: [3, 11]}
+  - {code: 58, data: "F3F3F33303C3F33F", src: [4, 11]}
+  - {code: 59, data: "FCF0C00000000000", src: [2, 12]}
+  - {code: 60, data: "0F03030000000000", src: [4, 12]}
   - {code: 61, data: "CFCFCFCFCFCFCFCF", src: [5, 9]}
   - {code: 62, data: "FFFFC00FC3F003FF", src: [6, 9]}
   - {code: 63, data: "F3F3F3F3F3F3F3F3", src: [7, 9]}
@@ -88,19 +88,19 @@ object_groups:
   - {code: 74, data: "00000C0C0C0C0C3F", src: [12, 9]}
   - {code: 75, data: "000000000030FC30", src: [14, 9]}
   - {code: 76, data: "F0F0F0F0F0F0F0F0", src: [11, 10]}
-  - {code: 77, data: "3F33FFFFCFFF3F00", src: [12, 10]}
+  - {code: 77, data: "3F3FFFFFFFFF3F00", src: [12, 10]}
   - {code: 78, data: "0000C3C3C3C30000", src: [13, 10]}
-  - {code: 79, data: "FCFCFF3FFFFFFC00", src: [14, 10]}
+  - {code: 79, data: "FCFCFFFFFFFFFC00", src: [14, 10]}
   - {code: 80, data: "FFFFF0F0F0F0F0F0", src: [11, 11]}
   - {code: 81, data: "FFFF00000F0C0C0F", src: [12, 11]}
   - {code: 82, data: "FFFF000000000000", src: [13, 11]}
   - {code: 83, data: "FFFF000030F0F030", src: [14, 11]}
-  - {code: 84, data: "3FFFFFCFFCFF3F00", src: [12, 12]}
+  - {code: 84, data: "3FFFFFFFFFFF3F00", src: [12, 12]}
   - {code: 85, data: "00C3C3C3C3C30000", src: [13, 12]}
-  - {code: 86, data: "FCFFCFFFF3FFFC00", src: [14, 12]}
-  - {code: 87, data: "0003000303033003", object: 10, cells: [[0, 0]], frames: ["0003000303033003", "0000000000030003", "00000C000C0C000C"]}
-  - {code: 88, data: "0000000030300030", object: 10, cells: [[1, 0]], frames: ["0000000030300030", "0000300030300030", "0000000000C000C0"]}
-  - {code: 89, data: "33333F3F0F002A00", object: 10, cells: [[0, 1]], frames: ["33333F3F0F002A00", "3303333F0F002A00", "0C3F3F3F0F002A00"]}
+  - {code: 86, data: "FCFFFFFFFFFFFC00", src: [14, 12]}
+  - {code: 87, data: "0000000303003003", object: 10, cells: [[0, 0]], frames: ["0000000303003003", "0000000000030003", "000000000C00000C"]}
+  - {code: 88, data: "0000000000300030", object: 10, cells: [[1, 0]], frames: ["0000000000300030", "0000000030000030", "0000000000C000C0"]}
+  - {code: 89, data: "30333F3F0F002A00", object: 10, cells: [[0, 1]], frames: ["30333F3F0F002A00", "3303333F0F002A00", "0C3F3F3F0F002A00"]}
   - {code: 90, data: "30FCFCF0F000AA00", object: 10, cells: [[1, 1]], frames: ["30FCFCF0F000AA00", "30F0FCFCF000AA00", "CCC0CCFCF000AA00"]}
   - {code: 91, data: "0606060101010101", src: [0, 10]}
   - {code: 92, data: "5454504040404000", src: [1, 10]}
@@ -122,22 +122,18 @@ object_groups:
   - {code: 108, data: "1C1C1C1C1C1C1C00", src: [9, 5]}
   - {code: 109, data: "AAAAAAAAAAAAAAAA", src: [10, 5]}
   - {code: 110, data: "A0808A8AAAAAAAAA", src: [10, 6]}
-  - {code: 111, data: "0515151514141400", src: [16, 1]}
-  - {code: 112, data: "5555550000000000", src: [17, 1]}
-  - {code: 113, data: "5054545414141400", src: [19, 1]}
-  - {code: 114, data: "1414141414141400", src: [16, 2]}
-  - {code: 115, data: "1414141414141414", src: [16, 4]}
-  - {code: 116, data: "000000303003A3A0", object: 17, cells: [[1, 0]], frames: ["000000303003A3A0", "000000C0C000A3A0"]}
-  - {code: 117, data: "3C3C282828282828", object: 17, cells: [[0, 1]], frames: ["3C3C282828282828", "003C282828282828"]}
-  - {code: 118, data: "A2A2A2A202A05211", src: [18, 6]}
-  - {code: 119, data: "808C808888088848", object: 17, cells: [[2, 1]], frames: ["808C808888088848", "8C8C808888088848"]}
-  - {code: 120, data: "00A8540405030100", src: [17, 7]}
-  - {code: 121, data: "1010155541C35555", src: [18, 7]}
-  - {code: 122, data: "404A454454C04000", src: [19, 7]}
-  - {code: 123, data: "0014141414141414", src: [18, 8]}
-  - {code: 124, data: "1414001465555500", src: [18, 9]}
-  - {code: 125, data: "3C3CFFC3C3FF3C3C", object: 22, cells: [[0, 0]], frames: ["3C3CFFC3C3FF3C3C", "C3C3FF3C3C3C3CFF", "FF3C3C3C3CFFC3C3", "0000000000000000"]}
-  - {code: 126, data: "3C3C00003C3C0000", object: 23, cells: [[0, 0]], frames: ["3C3C00003C3C0000", "00003C3C00003C3C", "0000000000000000"]}
+  - {code: 111, data: "AA55FF0000000000", src: [17, 1]}
+  - {code: 112, data: "000000303003A3A0", object: 17, cells: [[1, 0]], frames: ["000000303003A3A0", "000000C0C000A3A0"]}
+  - {code: 113, data: "3C3C282828282828", object: 17, cells: [[0, 1]], frames: ["3C3C282828282828", "003C282828282828"]}
+  - {code: 114, data: "A2A2A2A202A05211", src: [18, 6]}
+  - {code: 115, data: "808C808888088848", object: 17, cells: [[2, 1]], frames: ["808C808888088848", "8C8C808888088848"]}
+  - {code: 116, data: "00A8540405030100", src: [17, 7]}
+  - {code: 117, data: "1010155541C35555", src: [18, 7]}
+  - {code: 118, data: "404A454454C04000", src: [19, 7]}
+  - {code: 119, data: "0014141414141414", src: [18, 8]}
+  - {code: 120, data: "1414001465555500", src: [18, 9]}
+  - {code: 121, data: "3C3CFFC3C3FF3C3C", object: 22, cells: [[0, 0]], frames: ["3C3CFFC3C3FF3C3C", "C3C3FF3C3C3C3CFF", "FF3C3C3C3CFFC3C3", "0000000000000000"]}
+  - {code: 122, data: "3C3C00003C3C0000", object: 23, cells: [[0, 0]], frames: ["3C3C00003C3C0000", "00003C3C00003C3C", "0000000000000000"]}
 objects:
 - {id: 1, name: column1, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, animation_speed: 0, frames: [{x: 0, y: 0, w: 4, h: 6}]}
 - {id: 2, name: arch, group: castle, tags: [], non-blockable: true, pickable: false, colpf3: false, animation_speed: 0, frames: [{x: 4, y: 0, w: 5, h: 6}]}

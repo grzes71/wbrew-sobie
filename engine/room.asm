@@ -15,9 +15,13 @@
     .ifndef room_block_map
 room_block_map          = $3700     ; Fallback for standalone test harnesses
     .endif
+    .ifndef room_ladder_map
+room_ladder_map         = $3778     ; Fallback for standalone test harnesses
+    .endif
 
 ROOM_BLOCK_ROW_BYTES    = 5         ; 40 cells = 5 bytes/row (MSB = leftmost cell in group of 8)
 ROOM_BLOCK_MAP_SIZE     = ROOM_HEIGHT * ROOM_BLOCK_ROW_BYTES ; 120 bytes
+ROOM_OBJ_FLAG_LADDER    = $80       ; Internal bit in zp_room_obj_nb during room_draw
 
 ; --- Precomputed Screen Row Start Addresses (24 entries, SoA) ---
 screen_row_lo
@@ -57,6 +61,19 @@ col_bit_mask
     ldx #(ROOM_BLOCK_MAP_SIZE - 1)
 @loop
     sta room_block_map,x
+    dex
+    bpl @loop
+    rts
+.endp
+
+; ------------------------------------------------------------------------------
+; clear_room_ladder_map — Clears 120 bytes of room_ladder_map to $00
+; ------------------------------------------------------------------------------
+.proc clear_room_ladder_map
+    lda #0
+    ldx #(ROOM_BLOCK_MAP_SIZE - 1)
+@loop
+    sta room_ladder_map,x
     dex
     bpl @loop
     rts
@@ -180,6 +197,172 @@ col_bit_mask
 .endp
 
 ; ------------------------------------------------------------------------------
+; cell_ladder — Tests whether cell (col=X, row=Y) has the ladder tag
+; Inputs:
+;   X = column (0..39), Y = row (0..23+)
+; Outputs:
+;   C = 1, A != 0 if ladder; C = 0, A = 0 if not ladder or outside room
+; ------------------------------------------------------------------------------
+.proc cell_ladder
+    cpy #ROOM_HEIGHT            ; 2
+    bcs @not_ladder             ; 2/3  Row >= 24 counts as NOT ladder
+    cpx #ROOM_WIDTH             ; 2
+    bcs @not_ladder             ; 2/3  Col >= 40 counts as NOT ladder
+    lda block_row_off,y         ; 4    row * 5
+    clc                         ; 2
+    adc col_byte_off,x          ; 4    + (col >> 3)
+    tay                         ; 2
+    lda room_ladder_map,y       ; 4
+    and col_bit_mask,x          ; 4    Test MSB-first bit
+    beq @not_ladder             ; 2/3
+    sec                         ; 2
+    rts                         ; 6
+@not_ladder
+    lda #0                      ; 2
+    clc                         ; 2
+    rts                         ; 6
+.endp
+
+; ------------------------------------------------------------------------------
+; row_range_ladder — Tests if any cell in row Y within columns A..X is a ladder
+; Inputs:
+;   Y = row (0..23+), A = col_a, X = col_b (clamped to ROOM_WIDTH-1)
+; Outputs:
+;   C = 1, A != 0 if any cell in [col_a..col_b] is a ladder; C = 0, A = 0 else
+; Clobbers:
+;   A, X, Y, zp_room_blk_row, zp_room_col_save, zp_room_obj_nb
+; ------------------------------------------------------------------------------
+.proc row_range_ladder
+    cpy #ROOM_HEIGHT            ; 2
+    bcs @not_ladder             ; 2/3
+    cmp #ROOM_WIDTH             ; 2
+    bcs @not_ladder             ; 2/3
+    cpx #ROOM_WIDTH             ; 2
+    bcc @col_b_ok               ; 2/3
+    ldx #(ROOM_WIDTH - 1)       ; 2
+@col_b_ok
+    sta zp_room_col_save        ; 3
+    txa                         ; 2
+    cmp zp_room_col_save        ; 3
+    bcc @not_ladder             ; 2/3
+    stx zp_room_obj_nb          ; 3
+    lda block_row_off,y         ; 4
+    sta zp_room_blk_row         ; 3
+    ldx zp_room_col_save        ; 3
+@range_loop
+    lda zp_room_blk_row         ; 3
+    clc                         ; 2
+    adc col_byte_off,x          ; 4
+    tay                         ; 2
+    lda room_ladder_map,y       ; 4
+    and col_bit_mask,x          ; 4
+    bne @is_ladder              ; 2/3
+    cpx zp_room_obj_nb          ; 3
+    bcs @not_ladder             ; 2/3
+    inx                         ; 2
+    bne @range_loop             ; 3
+@not_ladder
+    lda #0                      ; 2
+    clc                         ; 2
+    rts                         ; 6
+@is_ladder
+    sec                         ; 2
+    rts                         ; 6
+.endp
+
+; ------------------------------------------------------------------------------
+; row_range_support — Tests if any cell in row Y within columns A..X is blocked
+;                     OR a ladder (both support standing/walking/landing)
+; Inputs:
+;   Y = row (0..23+), A = col_a, X = col_b (clamped to ROOM_WIDTH-1)
+; Outputs:
+;   C = 1, A != 0 if supported; C = 0, A = 0 otherwise
+; Clobbers:
+;   A, X, Y, zp_room_blk_row, zp_room_col_save, zp_room_obj_nb
+; ------------------------------------------------------------------------------
+.proc row_range_support
+    cpy #ROOM_HEIGHT            ; 2
+    bcs @unsupported            ; 2/3
+    cmp #ROOM_WIDTH             ; 2
+    bcs @unsupported            ; 2/3
+    cpx #ROOM_WIDTH             ; 2
+    bcc @col_b_ok               ; 2/3
+    ldx #(ROOM_WIDTH - 1)       ; 2
+@col_b_ok
+    sta zp_room_col_save        ; 3
+    txa                         ; 2
+    cmp zp_room_col_save        ; 3
+    bcc @unsupported            ; 2/3
+    stx zp_room_obj_nb          ; 3
+    lda block_row_off,y         ; 4
+    sta zp_room_blk_row         ; 3
+    ldx zp_room_col_save        ; 3
+@range_loop
+    lda zp_room_blk_row         ; 3
+    clc                         ; 2
+    adc col_byte_off,x          ; 4
+    tay                         ; 2
+    lda room_block_map,y        ; 4
+    ora room_ladder_map,y       ; 4
+    and col_bit_mask,x          ; 4
+    bne @supported              ; 2/3
+    cpx zp_room_obj_nb          ; 3
+    bcs @unsupported            ; 2/3
+    inx                         ; 2
+    bne @range_loop             ; 3
+@unsupported
+    lda #0                      ; 2
+    clc                         ; 2
+    rts                         ; 6
+@supported
+    sec                         ; 2
+    rts                         ; 6
+.endp
+
+; ------------------------------------------------------------------------------
+; col_range_ladder — Tests if any cell in column X within rows A..Y is a ladder
+; Inputs:
+;   X = col (0..39+), A = row_a, Y = row_b (clamped to ROOM_HEIGHT-1)
+; Outputs:
+;   C = 1, A != 0 if any cell in [row_a..row_b] is a ladder; C = 0, A = 0 else
+; Clobbers:
+;   A, X, Y, zp_room_blk_row, zp_room_col_save, zp_room_obj_nb
+; ------------------------------------------------------------------------------
+.proc col_range_ladder
+    cpx #ROOM_WIDTH             ; 2
+    bcs @not_ladder             ; 2/3
+    cmp #ROOM_HEIGHT            ; 2
+    bcs @not_ladder             ; 2/3
+    cpy #ROOM_HEIGHT            ; 2
+    bcc @row_b_ok               ; 2/3
+    ldy #(ROOM_HEIGHT - 1)      ; 2
+@row_b_ok
+    sta zp_room_col_save        ; 3
+    tya                         ; 2
+    cmp zp_room_col_save        ; 3
+    bcc @not_ladder             ; 2/3
+    sty zp_room_obj_nb          ; 3
+    stx zp_room_blk_row         ; 3
+@loop
+    ldx zp_room_blk_row         ; 3
+    ldy zp_room_col_save        ; 3
+    jsr cell_ladder             ; 6+
+    bcs @is_ladder              ; 2/3
+    lda zp_room_col_save        ; 3
+    cmp zp_room_obj_nb          ; 3
+    bcs @not_ladder             ; 2/3
+    inc zp_room_col_save        ; 5
+    bne @loop                   ; 3
+@not_ladder
+    lda #0                      ; 2
+    clc                         ; 2
+    rts                         ; 6
+@is_ladder
+    sec                         ; 2
+    rts                         ; 6
+.endp
+
+; ------------------------------------------------------------------------------
 ; room_draw — Renders a compiled room into SCREEN_VRAM (40x24, 960 bytes) and
 ;             builds room_block_map (120 bytes)
 ; Input:
@@ -197,6 +380,7 @@ col_bit_mask
     pha                         ; Preserve room ID across clear routines
     jsr clear_screen_vram
     jsr clear_room_block_map
+    jsr clear_room_ladder_map
     pla
     tax                         ; X = room_id
 
@@ -262,6 +446,23 @@ col_bit_mask
     lda obj_flags,x
     and #OBJ_FLAG_NON_BLOCKABLE
     sta zp_room_obj_nb
+    .ifdef TAG_LADDER
+        .if TAG_LADDER_PLANE == 0
+    lda obj_tags0,x
+        .elseif TAG_LADDER_PLANE == 1
+    lda obj_tags1,x
+        .elseif TAG_LADDER_PLANE == 2
+    lda obj_tags2,x
+        .else
+    lda obj_tags3,x
+        .endif
+    and #TAG_LADDER
+    beq @not_ladder_obj
+    lda zp_room_obj_nb
+    ora #ROOM_OBJ_FLAG_LADDER
+    sta zp_room_obj_nb
+@not_ladder_obj
+    .endif
 
     lda (zp_room_inst_x),y
     sta zp_room_base_x
@@ -315,7 +516,8 @@ col_bit_mask
     ldy zp_room_obj_w
     dey
     lda zp_room_obj_nb
-    bne @stamp_col_loop         ; Non-blockable objects never mark room_block_map
+    bmi @stamp_lad_row          ; Bit 7 set -> non-blockable ladder marks room_ladder_map
+    bne @stamp_col_loop         ; Non-blockable non-ladder objects never mark bitmaps
 
     ldx zp_room_draw_y
     lda block_row_off,x
@@ -340,6 +542,32 @@ col_bit_mask
 @skip_blk_cell
     dey
     bpl @stamp_blk_col_loop
+    bmi @stamp_row_next         ; Unconditional (Y == $FF)
+
+@stamp_lad_row
+    ldx zp_room_draw_y
+    lda block_row_off,x
+    sta zp_room_blk_row
+@stamp_lad_col_loop
+    lda (zp_room_obj_ptr),y
+    beq @skip_lad_cell          ; Code 0 is transparent
+    sta (zp_room_scr_ptr),y
+    sty zp_room_col_save
+    tya
+    clc
+    adc zp_room_cur_x
+    tax                         ; X = col (0..39)
+    lda zp_room_blk_row
+    clc
+    adc col_byte_off,x
+    tay
+    lda room_ladder_map,y
+    ora col_bit_mask,x
+    sta room_ladder_map,y
+    ldy zp_room_col_save
+@skip_lad_cell
+    dey
+    bpl @stamp_lad_col_loop
     bmi @stamp_row_next         ; Unconditional (Y == $FF)
 
 @stamp_col_loop

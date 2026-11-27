@@ -22,6 +22,7 @@ HERO_WALK_SPEED_SUBSTEPS = 3        ; Grounded frames per walk step (3 = 1/3 cc/
 HERO_WALK_ANIM_TICKS    = 5         ; PAL frames per walk anim frame (~+50% vs prior 8-frame pace)
 HERO_WALK_SPEED_CC      = HERO_WALK_STEP_CC ; Tunable step size alias
 HERO_JUMP_SPEED_CC      = 1         ; Tunable ballistic jump horizontal speed (cc/frame, 1..4)
+HERO_CLIMB_SPEED        = 1         ; Tunable vertical ladder climb/descend speed (scanlines/frame, 1..4)
 HERO_FACING_RIGHT       = 0
 HERO_FACING_LEFT        = 1
 HERO_START_FACING       = HERO_FACING_RIGHT
@@ -32,9 +33,11 @@ HERO_STATE_STANDING     = 0
 HERO_STATE_FALLING      = 1
 HERO_STATE_JUMPING      = 2
 HERO_STATE_SQUATTING    = 3
+HERO_STATE_ON_LADDER    = 4
 HERO_STAND_SET          = HERO_WALK_RIGHT
 HERO_STAND_FRAME        = 0
 HERO_FALL_SET           = HERO_FALL
+HERO_LADDER_SET         = HERO_UP_DOWN
 
 ; --- Joystick 0 Input Masks & Decoded Commands (zp_joy_curr, 0 = pressed) ---
 JOY_MASK_UP             = $01
@@ -51,6 +54,7 @@ HERO_CMD_JUMP_LEFT      = 4
 HERO_CMD_SQUAT_RIGHT    = 5
 HERO_CMD_SQUAT_LEFT     = 6
 HERO_CMD_SQUAT          = 7         ; DOWN only: squat keeping current zp_hero_facing
+HERO_CMD_CLIMB_UP       = 8         ; UP only: climb/grab ladder if behind hero, else stand still
 
 ; --- Room Gameplay PMG Hardware Modes ---
 GAME_DMACTL             = $3A       ; Normal PF ($02) + Players DMA ($08) + 1-line PMG ($10) + DL DMA ($20)
@@ -85,8 +89,8 @@ hero_joy_cmd_tbl
     dta HERO_CMD_JUMP_LEFT      ; $A (%1010): UP+LEFT
     dta HERO_CMD_WALK_LEFT      ; $B (%1011): LEFT
     dta HERO_CMD_NONE           ; $C (%1100): UP+DOWN -> neutral
-    dta HERO_CMD_SQUAT          ; $D (%1101): DOWN only -> squat facing preserved
-    dta HERO_CMD_NONE           ; $E (%1110): UP only -> stand still
+    dta HERO_CMD_SQUAT          ; $D (%1101): DOWN only -> squat facing preserved (or descend ladder)
+    dta HERO_CMD_CLIMB_UP       ; $E (%1110): UP only -> climb/grab ladder if behind hero, else idle
     dta HERO_CMD_NONE           ; $F (%1111): centre -> stand still
 
 ; --- Facing-Indexed Sprite Set Lookup Tables (SoA: 0=RIGHT, 1=LEFT) ---
@@ -118,6 +122,9 @@ hero_squat_set_tbl
     .endif
     .if (HERO_JUMP_SPEED_CC < 1) || (HERO_JUMP_SPEED_CC > 4)
         .error 'HERO_JUMP_SPEED_CC must be in 1..4 cc (single cell step)'
+    .endif
+    .if (HERO_CLIMB_SPEED < 1) || (HERO_CLIMB_SPEED > 4)
+        .error 'HERO_CLIMB_SPEED must be in 1..4 scanlines/frame'
     .endif
     .if (HERO_FALL_MAX_STEP < 1) || (HERO_FALL_MAX_STEP > 8)
         .error 'HERO_FALL_MAX_STEP must be in 1..8 scanlines to guarantee single-boundary crossing'
@@ -216,9 +223,9 @@ hero_squat_set_tbl
 .endp
 
 ; ------------------------------------------------------------------------------
-; hero_check_support — Checks whether hero bottom sits on a blocked cell row
+; hero_check_support — Checks whether hero bottom sits on a blocked OR ladder row
 ; Outputs:
-;   C = 1 if bottom % 8 == 0 and row (bottom / 8) is blocked within footprint; C = 0 else
+;   C = 1 if bottom % 8 == 0 and row (bottom / 8) is blocked or ladder within footprint
 ; ------------------------------------------------------------------------------
 .proc hero_check_support
     lda zp_hero_y                       ; 3
@@ -237,9 +244,113 @@ hero_squat_set_tbl
     pla                                 ; 4
     tay                                 ; 2     Y = support row
     lda zp_hero_tmp                     ; 3     A = col_left
-    jmp row_range_blocked               ; 3+    Returns C=1 supported / C=0 unsupported
+    jmp row_range_support               ; 3+    Returns C=1 supported / C=0 unsupported
 @unsupported
     lda #0                              ; 2
+    clc                                 ; 2
+    rts                                 ; 6
+.endp
+
+; ------------------------------------------------------------------------------
+; hero_ladder_under_feet — Checks whether hero bottom rests on a ladder cell row
+; Outputs:
+;   C = 1 if bottom % 8 == 0 and row (bottom / 8) has a ladder in footprint; C = 0 else
+; ------------------------------------------------------------------------------
+.proc hero_ladder_under_feet
+    lda zp_hero_y                       ; 3
+    sec                                 ; 2
+    sbc #HERO_TOP_TO_PF_BOTTOM          ; 2
+    tay                                 ; 2
+    and #$07                            ; 2
+    bne @no                             ; 2/3
+    tya                                 ; 2
+    lsr                                 ; 2
+    lsr                                 ; 2
+    lsr                                 ; 2     A = support row
+    pha                                 ; 3
+    jsr hero_footprint_cols             ; 6+    A = col_left, X = col_right
+    sta zp_hero_tmp                     ; 3
+    pla                                 ; 4
+    tay                                 ; 2     Y = support row
+    lda zp_hero_tmp                     ; 3     A = col_left
+    jmp row_range_ladder                ; 3+
+@no
+    lda #0                              ; 2
+    clc                                 ; 2
+    rts                                 ; 6
+.endp
+
+; ------------------------------------------------------------------------------
+; hero_can_descend_ladder — True iff support row has ladder AND no blockable cell
+; Outputs:
+;   C = 1 if hero can descend into ladder shaft below feet; C = 0 otherwise
+; ------------------------------------------------------------------------------
+.proc hero_can_descend_ladder
+    lda zp_hero_y                       ; 3
+    sec                                 ; 2
+    sbc #HERO_TOP_TO_PF_BOTTOM          ; 2
+    tay                                 ; 2
+    and #$07                            ; 2
+    bne @no                             ; 2/3
+    tya                                 ; 2
+    lsr                                 ; 2
+    lsr                                 ; 2
+    lsr                                 ; 2     A = support row
+    sta zp_hero_tmp2                    ; 3
+    jsr hero_footprint_cols             ; 6+    A = col_left, X = col_right
+    sta zp_hero_tmp                     ; 3
+    stx zp_hero_tmp3                    ; 3
+    ldy zp_hero_tmp2                    ; 3
+    jsr row_range_ladder                ; 6+
+    bcc @no                             ; 2/3
+    lda zp_hero_tmp                     ; 3     A = col_left
+    ldx zp_hero_tmp3                    ; 3     X = col_right
+    ldy zp_hero_tmp2                    ; 3     Y = support row
+    jsr row_range_blocked               ; 6+
+    bcs @no                             ; 2/3   Partially on blockable floor -> cannot descend
+    sec                                 ; 2
+    rts                                 ; 6
+@no
+    clc                                 ; 2
+    rts                                 ; 6
+.endp
+
+; ------------------------------------------------------------------------------
+; hero_ladder_behind — Tests whether hero body box at (zp_hero_x, zp_hero_y)
+;                      overlaps any cell with the ladder tag
+; Outputs:
+;   C = 1 if ladder overlaps body; C = 0 otherwise
+; Clobbers:
+;   A, X, Y, zp_hero_tmp, zp_hero_tmp2, zp_hero_tmp3, zp_room_*
+; ------------------------------------------------------------------------------
+.proc hero_ladder_behind
+    lda zp_hero_y                       ; 3
+    jsr hero_body_rows                  ; 6+    A = top_row, Y = bot_row
+    bcc @no                             ; 2/3
+    sta zp_hero_tmp                     ; 3     top_row
+    sty zp_hero_tmp2                    ; 3     bot_row
+    jsr hero_footprint_cols             ; 6+    A = col_left, X = col_right
+    sta zp_hero_tmp3                    ; 3     cur_col = col_left
+    txa                                 ; 2
+    pha                                 ; 3     Stack: [col_right]
+@col_loop
+    ldx zp_hero_tmp3                    ; 3     X = cur_col
+    lda zp_hero_tmp                     ; 3     A = top_row
+    ldy zp_hero_tmp2                    ; 3     Y = bot_row
+    jsr col_range_ladder                ; 6+
+    bcs @yes                            ; 2/3
+    pla                                 ; 4     A = col_right
+    cmp zp_hero_tmp3                    ; 3
+    beq @no                             ; 2/3
+    bcc @no                             ; 2/3
+    pha                                 ; 3
+    inc zp_hero_tmp3                    ; 5
+    bne @col_loop                       ; 3
+@yes
+    pla                                 ; 4     Discard col_right
+    sec                                 ; 2
+    rts                                 ; 6
+@no
     clc                                 ; 2
     rts                                 ; 6
 .endp
@@ -444,6 +555,94 @@ hero_squat_set_tbl
 .endp
 
 ; ------------------------------------------------------------------------------
+; hero_try_ladder_step_x — Sideways move on ladder in dir A by step Y (1..4 cc)
+;                          Enforces screen edges, blockable walls, AND ladder columns.
+; Inputs:
+;   A = direction (HERO_FACING_RIGHT=0 / HERO_FACING_LEFT=1)
+;   Y = step in color clocks (1..4)
+; Outputs:
+;   C = 1 if zp_hero_x changed (and sets zp_hero_dirty = 1), C = 0 if stopped
+; ------------------------------------------------------------------------------
+.proc hero_try_ladder_step_x
+    pha                                 ; 3     Stack: [dir]
+    sty zp_hero_tmp                     ; 3     Save step
+    cmp #HERO_FACING_RIGHT              ; 2
+    bne @calc_left                      ; 2/3
+
+    lda zp_hero_x                       ; 3
+    clc                                 ; 2
+    adc zp_hero_tmp                     ; 3
+    bcs @r_clamp                        ; 2/3
+    cmp #(HERO_MAX_X_CC + 1)            ; 2
+    bcc @cand_ready                     ; 2/3
+@r_clamp
+    lda #HERO_MAX_X_CC                  ; 2
+    jmp @cand_ready                     ; 3
+
+@calc_left
+    lda zp_hero_x                       ; 3
+    sec                                 ; 2
+    sbc zp_hero_tmp                     ; 3
+    bcs @cand_ready                     ; 2/3
+    lda #0                              ; 2
+
+@cand_ready
+    cmp zp_hero_x                       ; 3
+    beq @pop1_no                        ; 2/3   Clamped against screen edge
+    pha                                 ; 3     Stack: [dir, cand_x]
+    tax                                 ; 2     X = cand_x
+    lda zp_hero_y                       ; 3
+    jsr hero_blocked_at                 ; 6+    Reject entry into blockable walls
+    bcs @pop2_no                        ; 2/3
+
+    ; Leading edge column of cand_x must overlap ladder within body rows
+    lda zp_hero_y                       ; 3
+    jsr hero_body_rows                  ; 6+    A = top_row, Y = bot_row
+    bcc @pop2_no                        ; 2/3
+    sta zp_hero_tmp                     ; 3     top_row
+    sty zp_hero_tmp2                    ; 3     bot_row
+
+    pla                                 ; 4     A = cand_x (Stack: [dir])
+    tay                                 ; 2     Y = cand_x
+    pla                                 ; 4     A = dir (Stack empty)
+    cmp #HERO_FACING_RIGHT              ; 2
+    bne @lead_left                      ; 2/3
+    tya                                 ; 2     A = cand_x
+    pha                                 ; 3     Stack: [cand_x]
+    clc                                 ; 2
+    adc #(HERO_COLLISION_WIDTH_CC - 1)  ; 2
+    lsr                                 ; 2
+    lsr                                 ; 2     leading col_right
+    tax                                 ; 2
+    jmp @check_lead                     ; 3
+@lead_left
+    tya                                 ; 2     A = cand_x
+    pha                                 ; 3     Stack: [cand_x]
+    lsr                                 ; 2
+    lsr                                 ; 2     leading col_left
+    tax                                 ; 2
+@check_lead
+    lda zp_hero_tmp                     ; 3     A = top_row
+    ldy zp_hero_tmp2                    ; 3     Y = bot_row
+    jsr col_range_ladder                ; 6+
+    bcc @pop1_no                        ; 2/3   Outside ladder columns
+
+    pla                                 ; 4     A = cand_x
+    sta zp_hero_x                       ; 3
+    lda #1                              ; 2
+    sta zp_hero_dirty                   ; 3
+    sec                                 ; 2
+    rts                                 ; 6
+
+@pop2_no
+    pla                                 ; 4     Discard cand_x
+@pop1_no
+    pla                                 ; 4     Discard dir / cand_x
+    clc                                 ; 2
+    rts                                 ; 6
+.endp
+
+; ------------------------------------------------------------------------------
 ; hero_read_input — Decodes active-low Joystick 0 bits (zp_joy_curr) into HERO_CMD_*
 ; Outputs:
 ;   A = HERO_CMD_* (0..6)
@@ -543,6 +742,67 @@ hero_squat_set_tbl
     lda #1                              ; 2
     sta zp_hero_dirty                   ; 3
     rts                                 ; 6
+.endp
+
+; ------------------------------------------------------------------------------
+; hero_enter_ladder — Enters ON_LADDER state (gravity disabled, HERO_UP_DOWN set)
+; ------------------------------------------------------------------------------
+.proc hero_enter_ladder
+    lda #HERO_STATE_ON_LADDER           ; 2
+    sta zp_hero_state                   ; 3
+    lda #HERO_LADDER_SET                ; 2
+    sta zp_hero_anim_set                ; 3
+    ldx #HERO_LADDER_SET                ; 2
+    lda hero_set_dur,x                  ; 4
+    sta zp_hero_anim_timer              ; 3
+    lda #0                              ; 2
+    sta zp_hero_anim_frame              ; 3
+    sta zp_hero_fall_idx                ; 3
+    sta zp_hero_walk_sub                ; 3
+    lda #HERO_JUMP_DIR_NONE             ; 2
+    sta zp_hero_jump_dir                ; 3
+    lda #1                              ; 2
+    sta zp_hero_dirty                   ; 3
+    rts                                 ; 6
+.endp
+
+; ------------------------------------------------------------------------------
+; hero_jump_from_ladder — Consumes zp_fire_pressed and starts normal jump from ladder
+; ------------------------------------------------------------------------------
+.proc hero_jump_from_ladder
+    lda #0                              ; 2
+    sta zp_fire_pressed                 ; 3     Consume FIRE so scene does not exit
+    lda zp_joy_curr                     ; 3
+    and #(JOY_MASK_LEFT | JOY_MASK_RIGHT) ; 2
+    cmp #JOY_MASK_RIGHT                 ; 2     LEFT pressed, RIGHT released?
+    bne @chk_right                      ; 2/3
+    lda #HERO_FACING_LEFT               ; 2
+    jmp @launch                         ; 3
+@chk_right
+    cmp #JOY_MASK_LEFT                  ; 2     RIGHT pressed, LEFT released?
+    bne @use_facing                     ; 2/3
+    lda #HERO_FACING_RIGHT              ; 2
+    jmp @launch                         ; 3
+@use_facing
+    lda zp_hero_facing                  ; 3
+@launch
+    sta zp_hero_facing                  ; 3
+    sta zp_hero_jump_dir                ; 3
+    tax                                 ; 2
+    lda hero_jump_set_tbl,x             ; 4
+    sta zp_hero_anim_set                ; 3
+    tax                                 ; 2
+    lda hero_set_dur,x                  ; 4
+    sta zp_hero_anim_timer              ; 3
+    lda #0                              ; 2
+    sta zp_hero_anim_frame              ; 3
+    sta zp_hero_jump_idx                ; 3
+    sta zp_hero_walk_sub                ; 3
+    lda #HERO_STATE_JUMPING             ; 2
+    sta zp_hero_state                   ; 3
+    lda #1                              ; 2
+    sta zp_hero_dirty                   ; 3
+    jmp hero_update_jump                ; 3+
 .endp
 
 ; ------------------------------------------------------------------------------
@@ -745,7 +1005,11 @@ hero_squat_set_tbl
     bne @not_jump                       ; 2/3
     jmp hero_update_jump                ; 3
 @not_jump
+    cmp #HERO_STATE_SQUATTING           ; 2
+    bne @on_ladder                      ; 2/3
     jmp hero_update_squat               ; 3
+@on_ladder
+    jmp hero_update_ladder              ; 3
 
 @standing
     jsr hero_check_support              ; 6+
@@ -754,6 +1018,13 @@ hero_squat_set_tbl
     jmp hero_pmg_draw                   ; 3+
 
 @supported
+    ; Pressing FIRE while standing on a ladder starts a normal jump
+    lda zp_fire_pressed                 ; 3
+    beq @no_ladder_fire                 ; 2/3
+    jsr hero_ladder_under_feet          ; 6+
+    bcc @no_ladder_fire                 ; 2/3
+    jmp hero_jump_from_ladder           ; 3+
+@no_ladder_fire
     jsr hero_read_input                 ; 6+    A = HERO_CMD_*
     sta zp_hero_cmd                     ; 3
     beq @cmd_idle                       ; 2/3
@@ -761,9 +1032,26 @@ hero_squat_set_tbl
     bcc @cmd_walk                       ; 2/3   1..2 = WALK_RIGHT / WALK_LEFT
     cmp #HERO_CMD_SQUAT_RIGHT           ; 2
     bcc @cmd_jump                       ; 2/3   3..4 = JUMP_RIGHT / JUMP_LEFT
+    cmp #HERO_CMD_CLIMB_UP              ; 2
+    bne @cmd_down                       ; 2/3   5..7 = DOWN / DOWN+L / DOWN+R
 
+    ; HERO_CMD_CLIMB_UP (8): climb if ladder overlaps hero body, else stand still
+    jsr hero_ladder_behind              ; 6+
+    bcc @cmd_idle                       ; 2/3
+    jsr hero_enter_ladder               ; 6+
+    jmp hero_update_ladder              ; 3+
+
+@cmd_down
+    ; DOWN / DOWN+LEFT / DOWN+RIGHT: descend ladder if shaft below feet is clear, else squat
+    jsr hero_can_descend_ladder         ; 6+
+    bcc @do_squat                       ; 2/3
+    jsr hero_enter_ladder               ; 6+
+    jmp hero_update_ladder              ; 3+
+
+@do_squat
     ; HERO_CMD_SQUAT_RIGHT (5) / HERO_CMD_SQUAT_LEFT (6) / HERO_CMD_SQUAT (7)
     ; Collision box stays 8x18 (squat frames already occupy bottom lines of 18B window).
+    lda zp_hero_cmd                     ; 3
     cmp #HERO_CMD_SQUAT                 ; 2
     beq @squat_keep_facing              ; 2/3   DOWN only preserves zp_hero_facing
     sec                                 ; 2
@@ -892,6 +1180,17 @@ hero_squat_set_tbl
 ; hero_update_jump — Advances committed ballistic jump arc, ceiling/top clamp & X
 ; ------------------------------------------------------------------------------
 .proc hero_update_jump
+    ; Mid-jump ladder grab: after launch frame (jump_idx > 0), holding pure UP grabs ladder behind hero
+    lda zp_hero_jump_idx                ; 3
+    beq @no_mid_grab                    ; 2/3
+    jsr hero_read_input                 ; 6+
+    cmp #HERO_CMD_CLIMB_UP              ; 2
+    bne @no_mid_grab                    ; 2/3
+    jsr hero_ladder_behind              ; 6+
+    bcc @no_mid_grab                    ; 2/3
+    jsr hero_enter_ladder               ; 6+
+    jmp hero_pmg_draw                   ; 3+
+@no_mid_grab
     ldx zp_hero_jump_idx                ; 3
     cpx #HERO_JUMP_STEP_COUNT           ; 2
     bcs @at_min_y                       ; 2/3
@@ -992,6 +1291,15 @@ hero_squat_set_tbl
 ; hero_update_fall — Advances falling physics (and jump X velocity if airborne jump)
 ; ------------------------------------------------------------------------------
 .proc hero_update_fall
+    ; Mid-air ladder grab during descent/fall: holding pure UP grabs ladder behind hero
+    jsr hero_read_input                 ; 6+
+    cmp #HERO_CMD_CLIMB_UP              ; 2
+    bne @no_fall_grab                   ; 2/3
+    jsr hero_ladder_behind              ; 6+
+    bcc @no_fall_grab                   ; 2/3
+    jsr hero_enter_ladder               ; 6+
+    jmp hero_pmg_draw                   ; 3+
+@no_fall_grab
     lda zp_hero_jump_dir                ; 3
     bmi @no_air_x                       ; 2/3   Vertical-only fall -> skip X step
     ldy #HERO_JUMP_SPEED_CC             ; 2
@@ -1029,7 +1337,7 @@ hero_squat_set_tbl
     tay                                 ; 2     Y = new_row
     sty zp_hero_tmp2                    ; 3     Save new_row for snap
     lda zp_hero_tmp                     ; 3     A = col_left
-    jsr row_range_blocked               ; 6+
+    jsr row_range_support               ; 6+    Land on blockable OR ladder rung
     bcc @no_landing                     ; 2/3
 
     ; Landed cleanly on boundary (new_row * 8) -> snap and switch to STANDING
@@ -1080,6 +1388,8 @@ hero_squat_set_tbl
     jsr hero_read_input                 ; 6+
     cmp #HERO_CMD_SQUAT_RIGHT           ; 2
     bcc @exit_squat                     ; 2/3   Not squat command (< 5)
+    cmp #(HERO_CMD_SQUAT + 1)           ; 2
+    bcs @exit_squat                     ; 2/3   Not squat command (> 7, e.g. CLIMB_UP)
     cmp #HERO_CMD_SQUAT                 ; 2
     beq @same_dir                       ; 2/3   DOWN only preserves current facing seamlessly
     sec                                 ; 2
@@ -1120,5 +1430,199 @@ hero_squat_set_tbl
 
 @exit_squat
     jsr hero_enter_standing             ; 6+
+    jmp hero_pmg_draw                   ; 3+
+.endp
+
+; ------------------------------------------------------------------------------
+; hero_update_ladder — Handles ON_LADDER climbing, descending, sideways clamping,
+;                      top-rung exit, bottom landing, hanging fall-off, and FIRE jump
+; ------------------------------------------------------------------------------
+.proc hero_update_ladder
+    ; Pressing FIRE on a ladder starts a normal jump and ends climbing
+    lda zp_fire_pressed                 ; 3
+    beq @no_fire                        ; 2/3
+    jmp hero_jump_from_ladder           ; 3+
+@no_fire
+    lda #0                              ; 2
+    sta zp_hero_cmd                     ; 3     moved flag = 0
+
+    ; --- 1. Horizontal movement within ladder columns (LEFT / RIGHT) ---
+    lda zp_joy_curr                     ; 3
+    and #(JOY_MASK_LEFT | JOY_MASK_RIGHT) ; 2
+    cmp #JOY_MASK_RIGHT                 ; 2     LEFT pressed, RIGHT released?
+    bne @chk_right                      ; 2/3
+    lda #HERO_FACING_LEFT               ; 2
+    jmp @do_horiz                       ; 3
+@chk_right
+    cmp #JOY_MASK_LEFT                  ; 2     RIGHT pressed, LEFT released?
+    bne @no_horiz                       ; 2/3
+    lda #HERO_FACING_RIGHT              ; 2
+@do_horiz
+    sta zp_hero_facing                  ; 3
+    lda zp_hero_walk_sub                ; 3
+    beq @step_horiz                     ; 2/3
+    dec zp_hero_walk_sub                ; 5
+    jmp @vert                           ; 3
+@step_horiz
+    lda #(HERO_WALK_SPEED_SUBSTEPS - 1) ; 2
+    sta zp_hero_walk_sub                ; 3
+    lda zp_hero_facing                  ; 3
+    ldy #HERO_WALK_STEP_CC              ; 2
+    jsr hero_try_ladder_step_x          ; 6+
+    bcc @horiz_blocked                  ; 2/3
+    inc zp_hero_cmd                     ; 5     moved = 1
+    jmp @vert                           ; 3
+@horiz_blocked
+    lda #0                              ; 2
+    sta zp_hero_walk_sub                ; 3
+    jmp @vert                           ; 3
+@no_horiz
+    lda #0                              ; 2
+    sta zp_hero_walk_sub                ; 3
+
+    ; --- 2. Vertical movement (UP = climb, DOWN = descend) ---
+@vert
+    lda zp_joy_curr                     ; 3
+    and #(JOY_MASK_UP | JOY_MASK_DOWN)  ; 2
+    cmp #JOY_MASK_DOWN                  ; 2     UP pressed, DOWN released?
+    beq @climb_up                       ; 2/3
+    cmp #JOY_MASK_UP                    ; 2     DOWN pressed, UP released?
+    beq @climb_down                     ; 2/3
+    jmp @done_move                      ; 3
+
+@climb_up
+    lda zp_hero_y                       ; 3
+    sec                                 ; 2
+    sbc #HERO_CLIMB_SPEED               ; 2
+    bcc @clamp_top                      ; 2/3
+    cmp #HERO_MIN_PMG_Y                 ; 2
+    bcs @up_y_ok                        ; 2/3
+@clamp_top
+    lda #HERO_MIN_PMG_Y                 ; 2
+@up_y_ok
+    cmp zp_hero_y                       ; 3
+    beq @up_done                        ; 2/3
+    pha                                 ; 3     Stack: [cand_y]
+    ldx zp_hero_x                       ; 3
+    jsr hero_blocked_at                 ; 6+    Reject ceiling collision
+    bcs @up_blocked                     ; 2/3
+    pla                                 ; 4     A = cand_y
+    sta zp_hero_y                       ; 3
+    lda #1                              ; 2
+    sta zp_hero_dirty                   ; 3
+    inc zp_hero_cmd                     ; 5     moved = 1
+
+    ; Check if hero reached the top rung (bottom aligned to ladder row, no ladder behind body)
+    lda zp_hero_y                       ; 3
+    sec                                 ; 2
+    sbc #HERO_TOP_TO_PF_BOTTOM          ; 2
+    and #$07                            ; 2
+    bne @up_check_attached              ; 2/3
+    jsr hero_ladder_under_feet          ; 6+
+    bcc @up_check_attached              ; 2/3
+    jsr hero_ladder_behind              ; 6+
+    bcs @up_done                        ; 2/3   Stacked ladder above -> keep climbing
+    jsr hero_enter_standing             ; 6+    Top rung reached -> stand normally
+    jmp hero_pmg_draw                   ; 3+
+
+@up_check_attached
+    jsr hero_ladder_behind              ; 6+
+    bcs @up_done                        ; 2/3
+    jsr hero_ladder_under_feet          ; 6+
+    bcs @up_to_stand                    ; 2/3
+    jsr hero_enter_falling              ; 6+
+    jmp hero_pmg_draw                   ; 3+
+@up_to_stand
+    jsr hero_enter_standing             ; 6+
+    jmp hero_pmg_draw                   ; 3+
+@up_blocked
+    pla                                 ; 4     Discard cand_y
+@up_done
+    jmp @done_move                      ; 3
+
+@climb_down
+    lda zp_hero_y                       ; 3
+    sec                                 ; 2
+    sbc #HERO_TOP_TO_PF_BOTTOM          ; 2     old_bottom_pf
+    pha                                 ; 3
+    lsr                                 ; 2
+    lsr                                 ; 2
+    lsr                                 ; 2     old_row
+    sta zp_hero_tmp                     ; 3
+    pla                                 ; 4     old_bottom_pf
+    clc                                 ; 2
+    adc #HERO_CLIMB_SPEED               ; 2     new_bottom_pf
+    pha                                 ; 3     Stack: [new_bottom_pf]
+    lsr                                 ; 2
+    lsr                                 ; 2
+    lsr                                 ; 2     new_row
+    cmp zp_hero_tmp                     ; 3     Crossed row boundary?
+    beq @down_no_floor                  ; 2/3
+
+    pha                                 ; 3     Stack: [new_bottom_pf, new_row]
+    jsr hero_footprint_cols             ; 6+    A = col_left, X = col_right
+    sta zp_hero_tmp                     ; 3
+    pla                                 ; 4     A = new_row
+    tay                                 ; 2     Y = new_row
+    sty zp_hero_tmp2                    ; 3
+    lda zp_hero_tmp                     ; 3     A = col_left
+    jsr row_range_blocked               ; 6+    Blockable floor below ladder?
+    bcc @down_no_floor                  ; 2/3
+
+    ; Landed on blockable floor below ladder -> snap and return to normal STANDING
+    pla                                 ; 4     Discard new_bottom_pf
+    lda zp_hero_tmp2                    ; 3     new_row
+    asl                                 ; 2
+    asl                                 ; 2
+    asl                                 ; 2
+    clc                                 ; 2
+    adc #HERO_TOP_TO_PF_BOTTOM          ; 2
+    sta zp_hero_y                       ; 3
+    jsr hero_enter_standing             ; 6+
+    jmp hero_pmg_draw                   ; 3+
+
+@down_no_floor
+    pla                                 ; 4     A = new_bottom_pf
+    clc                                 ; 2
+    adc #HERO_TOP_TO_PF_BOTTOM          ; 2     cand_y
+    cmp #PLAYFIELD_BOTTOM_PMG_Y         ; 2
+    bcs @down_fell_out                  ; 2/3
+    sta zp_hero_y                       ; 3
+    lda #1                              ; 2
+    sta zp_hero_dirty                   ; 3
+    inc zp_hero_cmd                     ; 5     moved = 1
+
+    ; Check if feet moved below a hanging ladder (bot_row no longer has ladder)
+    lda zp_hero_y                       ; 3
+    sec                                 ; 2
+    sbc #(HERO_TOP_TO_PF_BOTTOM + 1)    ; 2     last body scanline in PF
+    lsr                                 ; 2
+    lsr                                 ; 2
+    lsr                                 ; 2     bot_row
+    pha                                 ; 3
+    jsr hero_footprint_cols             ; 6+    A = col_left, X = col_right
+    sta zp_hero_tmp                     ; 3
+    pla                                 ; 4
+    tay                                 ; 2     Y = bot_row
+    lda zp_hero_tmp                     ; 3     A = col_left
+    jsr row_range_ladder                ; 6+
+    bcs @done_move                      ; 2/3   Still on ladder
+    jsr hero_enter_falling              ; 6+    Hanging ladder ended -> fall
+    jmp hero_pmg_draw                   ; 3+
+
+@down_fell_out
+    sta zp_hero_y                       ; 3
+    lda #HERO_JUMP_DIR_NONE             ; 2
+    sta zp_hero_jump_dir                ; 3
+    jsr hero_pmg_erase_drawn            ; 6+
+    lda #1                              ; 2
+    sta zp_hero_fell_out                ; 3
+    rts                                 ; 6
+
+@done_move
+    lda zp_hero_cmd                     ; 3
+    beq @draw                           ; 2/3   Stationary on rung -> hold pose, dirty=0
+    jsr hero_tick_anim                  ; 6+    Advance HERO_UP_DOWN climb animation
+@draw
     jmp hero_pmg_draw                   ; 3+
 .endp

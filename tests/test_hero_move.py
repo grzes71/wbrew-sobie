@@ -142,7 +142,9 @@ def _init_hero_on_grid(
     joy: int = JOY_CENTRE,
 ) -> None:
     _poke_block_map(mem, labels["ROOM_BLOCK_MAP"], grid)
+    _poke_block_map(mem, labels["ROOM_LADDER_MAP"], _build_block_grid())
     mem[labels["ZP_JOY_CURR"]] = joy
+    mem[labels["ZP_FIRE_PRESSED"]] = 0
     mpu.x = start_x_cell
     mpu.y = start_y_cell
     _run_subroutine(mpu, labels["HERO_INIT"])
@@ -340,6 +342,7 @@ class HeroModel:
             0x0A: 4,  # JUMP_LEFT
             0x0B: 2,  # WALK_LEFT
             0x0D: 7,  # SQUAT (DOWN only, keep facing)
+            0x0E: 8,  # CLIMB_UP (UP only; idle when no ladder behind hero)
         }
         return tbl.get(joy_byte & 0x0F, 0)
 
@@ -351,7 +354,7 @@ class HeroModel:
                 self.dirty = 0
                 return
             cmd = self.read_input(joy_byte)
-            if cmd == 0:
+            if cmd in (0, 8):
                 self.walk_sub = 0
                 if self.anim_set != self.stand_set_for(self.facing) or self.anim_frame != self.labels["HERO_STAND_FRAME"]:
                     self.enter_standing()
@@ -472,7 +475,7 @@ class HeroModel:
             self.enter_falling()
             return
         cmd = self.read_input(joy_byte)
-        if cmd < 5:
+        if cmd < 5 or cmd > 7:
             self.enter_standing()
             return
         if cmd != self.labels["HERO_CMD_SQUAT"]:
@@ -1007,10 +1010,10 @@ def test_idle_fast_path_zero_dirty_and_vbi_cycle_budget() -> None:
     writes: list[int] = []
     om.subscribe_to_write(range(labels["PMG_P0"], labels["PMG_P0"] + 256), lambda a, _v: writes.append(a))
     om.subscribe_to_write([HPOSP0], lambda a, _v: writes.append(a))
-    for joy in (JOY_CENTRE, JOY_UP):
+    for joy, max_cyc in ((JOY_CENTRE, 300), (JOY_UP, 1000)):
         mem[labels["ZP_JOY_CURR"]] = joy
         idle_cyc = _run_subroutine(mpu_obs, labels["HERO_UPDATE"])
-        assert idle_cyc < 300
+        assert idle_cyc < max_cyc
     assert writes == []
     assert mem[labels["ZP_HERO_DIRTY"]] == 0
 

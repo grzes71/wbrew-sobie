@@ -118,13 +118,80 @@ stanów, np.:
 -   kucanie w prawo,
 -   skok w lewo,
 -   skok w prawo,
--   wspinanie,
+-   wspinanie (wchodzenie i schodzenie po drabinie),
 -   strzelanie.
 
 Nie zakładamy rozbudowanego modelu fizyki. Ruch powinien być oparty na
 prostych współrzędnych i sprawdzaniu kolizji z otoczeniem.
 
 Kierunek, w którym zwrócony jest Koval, ma znaczenie dla strzelania.
+
+### 3.1. Sterowanie (joystick)
+
+  Wejście                    Działanie
+  -------------------------- ------------------------------------------------
+  Lewo / Prawo               Chodzenie w danym kierunku (zmiana zwrotu)
+  Dół ("do tyłu")            Kucanie; na drabinie --- schodzenie
+  Góra ("do przodu")         Na drabinie za Kovalem --- wchodzenie
+  Fire                       Strzał (patrz sekcja 4)
+  Skok                       Skok w lewo / w prawo (zgodnie z bieżącym
+                             zwrotem lub kierunkiem joysticka)
+
+Dokładne mapowanie przycisków (skok, strzał) wynika z implementacji
+sterowania w silniku i powinno być aktualizowane razem z kodem.
+
+### 3.2. Ruch po podłożu
+
+-   Obiekty **blockable** stanowią podłoże i ściany --- Koval nie może
+    przez nie przechodzić.
+-   Gdy pod stopami Kovala nie ma podłoża (ani drabiny), Koval spada.
+-   Kucanie jest możliwe tylko na podłożu.
+
+### 3.3. Skok
+
+-   Skok jest możliwy w lewo i w prawo.
+-   Po skoku Koval wraca do normalnej fizyki i ląduje na podłożu
+    blockable albo na drabinie (patrz 3.4).
+
+### 3.4. Drabiny
+
+Drabina to obiekt **non-blockable** oznaczony tagiem `ladder`.
+
+**Chodzenie.** Gdy drabina znajduje się pod stopami Kovala, zachowuje
+się jak obiekt blockable: Koval może po niej normalnie chodzić
+lewo/prawo, bez spadania.
+
+**Schodzenie.**
+
+-   Gdy Koval stoi na drabinie i wciśnięty jest joystick "do tyłu"
+    (dół), zaczyna schodzić --- dopóki joystick jest wciśnięty.
+    Puszczenie joysticka zatrzymuje go na bieżącym szczeblu.
+-   W trakcie schodzenia Koval może poruszać się lewo/prawo, ale tylko w
+    obrębie kolumn drabiny.
+-   Gdy jego stopy znajdą się pod dolnym końcem drabiny (tam zwykle
+    znajduje się obiekt blockable), Koval normalnie na nim staje i wraca
+    do zwykłej fizyki.
+
+**Wchodzenie.**
+
+-   Gdy Koval stoi, a drabina znajduje się "za nim" (nakłada się na jego
+    pozycję), wciśnięcie joysticka "do przodu" (góra) rozpoczyna
+    wspinaczkę --- dopóki joystick jest wciśnięty.
+-   Po dotarciu na najwyższy szczebel Koval może tam normalnie stanąć i
+    poruszać się lewo/prawo tak, jakby szczebel był obiektem blockable.
+
+**Skok z drabiny i na drabinę.**
+
+-   Skok z drabiny jest dozwolony (w staniu, schodzeniu i wspinaniu).
+    Kończy stan wspinania i uruchamia zwykły skok.
+-   Skok na drabinę jest dozwolony: w trakcie skoku Koval może wylądować
+    na szczeblu drabiny (jak na obiekcie blockable) albo chwycić drabinę
+    za sobą wciskając "do przodu" (góra).
+-   Dokładne reguły chwytania drabiny w locie wynikają z implementacji i
+    powinny być tu uzupełnione po jej zakończeniu.
+
+**Stany.** W trakcie wspinania grawitacja jest wyłączona. Model
+stanów: `NORMAL ↔ NA_DRABINIE (stanie / wspinanie / schodzenie) ↔ SKOK`.
 
 ## 4. Broń i amunicja
 

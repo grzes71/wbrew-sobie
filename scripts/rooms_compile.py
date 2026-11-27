@@ -824,6 +824,11 @@ def compile_project(
         nb = bool(o.get("non-blockable", False))
         pick = bool(o.get("pickable", False))
         pf3 = bool(o.get("colpf3", False))
+        if "ladder" in otags and not nb:
+            raise RoomCompileError(
+                f"Object '{oname}' (ID {oid}) has tag 'ladder' but is blockable; "
+                "'ladder' tag is only allowed on non-blockable objects."
+            )
         anim_speed = _req_int(
             o.get("animation_speed", 0),
             f"object '{oname}'.animation_speed",
